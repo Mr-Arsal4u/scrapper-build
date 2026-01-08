@@ -1,0 +1,31 @@
+# Environment variables
+.env
+
+# Scraper Chrome profile
+.scraper-chrome-profile/
+
+# Scraped data
+scraped_data/
+temp_leads/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+
+# Excel files
+*.xlsx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

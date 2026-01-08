@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPN Setup - Foreclosure Scraper</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 700px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .setup-steps {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+        
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .step:last-child {
+            margin-bottom: 0;
+        }
+        
+        .step-number {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        
+        .step-content {
+            flex: 1;
+        }
+        
+        .step-content h3 {
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 1.1em;
+        }
+        
+        .step-content p {
+            color: #666;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+        
+        .button-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 30px;
+        }
+        
+        .setup-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 18px 40px;
+            font-size: 1.2em;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            width: 100%;
+        }
+        
+        .setup-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.6);
+        }
+        
+        .setup-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .ready-btn {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            padding: 18px 40px;
+            font-size: 1.2em;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(40, 167, 69, 0.4);
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            width: 100%;
+            display: none;
+        }
+        
+        .ready-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(40, 167, 69, 0.6);
+        }
+        
+        .ready-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .status-message {
+            text-align: center;
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 10px;
+            color: #666;
+            font-size: 1em;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .status-message.loading {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status-message.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+        
+        .status-message.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        
+        .info-box {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            color: #856404;
+        }
+        
+        .info-box strong {
+            color: #d68910;
+        }
+        
+        .vpn-extensions {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        
+        .vpn-extensions ul {
+            margin-left: 20px;
+            margin-top: 10px;
+        }
+        
+        .vpn-extensions li {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 VPN Extension Setup</h1>
+        <p class="subtitle">One-time setup to enable scraping</p>
+        
+        <div class="info-box">
+            <strong>📝 Note:</strong> This is a one-time setup. After completing these steps, 
+            the scraper will run continuously and automatically scrape every 5 minutes.
+        </div>
+        
+        <div class="setup-steps">
+            <div class="step">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <h3>Click "Setup VPN Extension" Button</h3>
+                    <p>This will open Chrome with the scraper's profile. Chrome Web Store will open automatically.</p>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <h3>Install VPN Extension</h3>
+                    <p>In the Chrome window that opens, search for "VPN" and install a free VPN extension:</p>
+                    <div class="vpn-extensions">
+                        <ul>
+                            <li><strong>Windscribe Free</strong> (recommended - 10GB/month)</li>
+                            <li><strong>TunnelBear Free</strong> (500MB/month)</li>
+                            <li><strong>ProtonVPN</strong> (if available)</li>
+                            <li>Any free VPN extension</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <h3>Connect VPN</h3>
+                    <p>Click the VPN extension icon in Chrome toolbar → Click "Connect" or "Turn On" → Wait for connection (icon should show "Connected")</p>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">4</div>
+                <div class="step-content">
+                    <h3>Verify VPN is Working</h3>
+                    <p>Visit <strong>https://api.ipify.org</strong> in Chrome - it should show a different IP address. Then close Chrome.</p>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">5</div>
+                <div class="step-content">
+                    <h3>Click "Ready to Scrape" Button</h3>
+                    <p>After completing the VPN setup, click the "Ready to Scrape" button below. The scraper will start running continuously!</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="button-container">
+            <button class="setup-btn" id="setupVpnBtn" onclick="openChromeForVpn()">
+                🔧 Setup VPN Extension
+            </button>
+            
+            <button class="ready-btn" id="readyBtn" onclick="markReadyToScrape()">
+                ✅ Ready to Scrape
+            </button>
+        </div>
+        
+        <div class="status-message" id="statusMessage"></div>
+    </div>
+    
+    <script>
+        // Check if setup is already complete
+        async function checkSetupStatus() {
+            try {
+                const response = await fetch('/api/setup-status');
+                const data = await response.json();
+                
+                if (data.setup_complete) {
+                    // Already set up, redirect to main page
+                    window.location.href = '/';
+                }
+            } catch (error) {
+                console.error('Error checking setup status:', error);
+            }
+        }
+        
+        // Show "Ready to Scrape" button after VPN setup button is clicked
+        function showReadyButton() {
+            const readyBtn = document.getElementById('readyBtn');
+            readyBtn.style.display = 'block';
+        }
+        
+        async function openChromeForVpn() {
+            const btn = document.getElementById('setupVpnBtn');
+            const statusMsg = document.getElementById('statusMessage');
+            
+            btn.disabled = true;
+            btn.textContent = 'Opening Chrome...';
+            statusMsg.textContent = 'Opening Chrome... Please wait.';
+            statusMsg.className = 'status-message loading';
+            
+            try {
+                const response = await fetch('/api/open-chrome-for-vpn', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusMsg.textContent = '✅ Chrome opened! Please follow the steps above to install and connect VPN extension.';
+                    statusMsg.className = 'status-message success';
+                    showReadyButton();
+                } else {
+                    statusMsg.textContent = `❌ Error: ${data.error}`;
+                    statusMsg.className = 'status-message error';
+                }
+            } catch (error) {
+                statusMsg.textContent = `❌ Error: ${error.message}`;
+                statusMsg.className = 'status-message error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔧 Setup VPN Extension';
+            }
+        }
+        
+        async function markReadyToScrape() {
+            const btn = document.getElementById('readyBtn');
+            const statusMsg = document.getElementById('statusMessage');
+            
+            btn.disabled = true;
+            btn.textContent = 'Starting Scraper...';
+            statusMsg.textContent = 'Marking setup as complete and starting scraper...';
+            statusMsg.className = 'status-message loading';
+            
+            try {
+                const response = await fetch('/api/mark-setup-complete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusMsg.textContent = '✅ Setup complete! Redirecting to scraper...';
+                    statusMsg.className = 'status-message success';
+                    
+                    // Redirect to main page after 1 second
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else {
+                    statusMsg.textContent = `❌ Error: ${data.error}`;
+                    statusMsg.className = 'status-message error';
+                    btn.disabled = false;
+                    btn.textContent = '✅ Ready to Scrape';
+                }
+            } catch (error) {
+                statusMsg.textContent = `❌ Error: ${error.message}`;
+                statusMsg.className = 'status-message error';
+                btn.disabled = false;
+                btn.textContent = '✅ Ready to Scrape';
+            }
+        }
+        
+        // Check setup status on page load
+        checkSetupStatus();
+    </script>
+</body>
+</html>
+
