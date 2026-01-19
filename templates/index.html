@@ -42,6 +42,8 @@
         .button-container {
             display: flex;
             justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
             margin-bottom: 30px;
         }
         
@@ -333,6 +335,7 @@
         <div class="button-container">
             <button class="scrape-btn" id="scrapeDataBtn" onclick="scrapeData()">Scrape Data</button>
             <button class="scrape-btn" id="downloadExcelBtn" onclick="downloadExcel()" style="display: none; background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">📥 Download Excel</button>
+            <button class="scrape-btn" id="updateSheetBtn" onclick="updateSheet()" style="display: none; background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);">📊 Update Sheet</button>
         </div>
         
         <div class="status-message" id="statusMessage">Ready to scrape. Click the button above to start.</div>
@@ -377,10 +380,14 @@
                     
                     // Leads display disabled - only showing stats
                     
-                    // Show download button if it exists
+                    // Show download and update sheet buttons if they exist
                     const downloadBtn = document.getElementById('downloadExcelBtn');
                     if (downloadBtn) {
                         downloadBtn.style.display = 'inline-block';
+                    }
+                    const updateSheetBtn = document.getElementById('updateSheetBtn');
+                    if (updateSheetBtn) {
+                        updateSheetBtn.style.display = 'inline-block';
                     }
                     
                     // Auto-download Excel file
@@ -419,6 +426,7 @@
             const progressText = document.getElementById('progressText');
             const resultsSummary = document.getElementById('resultsSummary');
             const downloadBtn = document.getElementById('downloadExcelBtn');
+            const updateSheetBtn = document.getElementById('updateSheetBtn');
             
             // Check if required elements exist
             if (!btn || !statusMsg) {
@@ -438,6 +446,7 @@
                 progressFill.textContent = '0%';
             }
             if (downloadBtn) downloadBtn.style.display = 'none';
+            if (updateSheetBtn) updateSheetBtn.style.display = 'none';
             
             try {
                 if (progressText) progressText.textContent = 'Scraping foreclosure data from all towns...';
@@ -500,9 +509,12 @@
                 statusMsg.textContent = successMsg;
                 statusMsg.className = 'status-message success';
                 
-                // Show download button
+                // Show download and update sheet buttons
                 if (excelFile && downloadBtn) {
                     downloadBtn.style.display = 'inline-block';
+                }
+                if (excelFile && updateSheetBtn) {
+                    updateSheetBtn.style.display = 'inline-block';
                 }
                 
                 // Show results summary
@@ -542,6 +554,63 @@
         
         async function downloadExcel() {
             window.location.href = '/download-excel';
+        }
+        
+        async function updateSheet() {
+            const btn = document.getElementById('updateSheetBtn');
+            const statusMsg = document.getElementById('statusMessage');
+            
+            if (!btn || !statusMsg) {
+                return;
+            }
+            
+            // Disable button and show loading
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+            statusMsg.textContent = 'Updating Google Sheet... Please wait.';
+            statusMsg.className = 'status-message loading';
+            
+            try {
+                const response = await fetch('/update-sheet', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusMsg.textContent = `✅ ${data.message}`;
+                    statusMsg.className = 'status-message success';
+                    
+                    if (data.spreadsheet_url) {
+                        const link = document.createElement('a');
+                        link.href = data.spreadsheet_url;
+                        link.target = '_blank';
+                        link.textContent = 'Open Google Sheet';
+                        link.className = 'sheets-link';
+                        link.style.display = 'inline-block';
+                        link.style.marginTop = '10px';
+                        statusMsg.appendChild(document.createElement('br'));
+                        statusMsg.appendChild(link);
+                    }
+                } else {
+                    statusMsg.textContent = `Error: ${data.error}`;
+                    statusMsg.className = 'status-message error';
+                }
+            } catch (error) {
+                console.error('Update sheet error:', error);
+                let errorMsg = error.message || 'Failed to update sheet';
+                if (errorMsg === 'Failed to fetch' || errorMsg.includes('fetch')) {
+                    errorMsg = 'Cannot connect to server. Make sure Flask server is running.';
+                }
+                statusMsg.textContent = `Error: ${errorMsg}`;
+                statusMsg.className = 'status-message error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📊 Update Sheet';
+            }
         }
         
         async function scrapeTowns() {

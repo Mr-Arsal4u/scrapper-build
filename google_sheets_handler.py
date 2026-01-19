@@ -369,6 +369,73 @@ class GoogleSheetsHandler:
             print(f"Full error traceback: {traceback.format_exc()}")
             raise Exception(error_msg)
     
+    def append_leads_excel_format(self, leads):
+        """Append leads in Excel format: Sale Date, Docket Number, Type of Sale & Property Address, Extraction Time"""
+        try:
+            if not self.worksheet:
+                self.get_or_create_spreadsheet()
+            
+            if not leads:
+                print("No leads to append")
+                return 0
+            
+            # Check if we need to initialize Excel format headers
+            existing_headers = self.worksheet.row_values(1)
+            excel_headers = ['Sale Date', 'Docket Number', 'Type of Sale & Property Address', 'Extraction Time']
+            needs_headers = False
+            
+            if not existing_headers:
+                needs_headers = True
+            elif existing_headers != excel_headers:
+                # Different headers, need to initialize
+                needs_headers = True
+            
+            if needs_headers:
+                # Clear and initialize with Excel format headers
+                self.worksheet.clear()
+                self.worksheet.append_row(excel_headers)
+                # Format header row
+                try:
+                    header_format = {
+                        'textFormat': {'bold': True},
+                        'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.7},
+                        'foregroundColor': {'red': 1.0, 'green': 1.0, 'blue': 1.0}
+                    }
+                    self.worksheet.format('1:1', header_format)
+                    self.worksheet.freeze(rows=1)
+                except:
+                    pass
+                print("✓ Initialized Excel format headers")
+            
+            # Format leads in Excel format
+            rows_to_append = []
+            for lead in leads:
+                row = [
+                    lead.get('Sale Date', ''),
+                    lead.get('Docket Number', ''),
+                    lead.get('Type of Sale & Property Address', ''),
+                    lead.get('Extraction Time', '')
+                ]
+                rows_to_append.append(row)
+            
+            # Append in batches (Google Sheets API limit is 500 rows per request)
+            batch_size = 100
+            total_added = 0
+            
+            for i in range(0, len(rows_to_append), batch_size):
+                batch = rows_to_append[i:i + batch_size]
+                self.worksheet.append_rows(batch, value_input_option='RAW')
+                total_added += len(batch)
+                print(f"  ✓ Appended {total_added}/{len(rows_to_append)} rows...")
+            
+            print(f"✓ Successfully appended {total_added} leads to spreadsheet in Excel format")
+            return total_added
+            
+        except Exception as e:
+            error_msg = f"Failed to append leads in Excel format: {str(e)}"
+            self._log_error(error_msg, e)
+            raise Exception(error_msg)
+    
     def get_spreadsheet_url(self):
         """Get the URL of the spreadsheet"""
         if self.spreadsheet:

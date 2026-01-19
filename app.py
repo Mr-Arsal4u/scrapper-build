@@ -62,9 +62,16 @@ except ImportError:
 # Import Google Sheets handler
 try:
     from google_sheets_handler import GoogleSheetsHandler
-except ImportError:
+    print("✅ Google Sheets handler loaded successfully")
+except ImportError as e:
     GoogleSheetsHandler = None
-    print("Warning: Google Sheets handler not available. Install gspread and google-auth.")
+    print(f"⚠️  Warning: Google Sheets handler not available. Error: {e}")
+    print("   Install dependencies: pip install gspread google-auth")
+except Exception as e:
+    GoogleSheetsHandler = None
+    print(f"⚠️  Warning: Google Sheets handler failed to load. Error: {e}")
+    import traceback
+    traceback.print_exc()
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this-in-production'  # Required for sessions
@@ -548,15 +555,141 @@ def scrape_town_leads(driver, town_name, original_window):
         return leads
 
 
+def get_chrome_version():
+    """Get installed Chrome version"""
+    try:
+        import subprocess
+        import re
+        import platform
+        
+        system = platform.system()
+        if system == "Windows":
+            # Try multiple registry locations
+            try:
+                result = subprocess.run(
+                    ['reg', 'query', 'HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon', '/v', 'version'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    match = re.search(r'version\s+REG_SZ\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                    if match:
+                        return match.group(1)
+            except:
+                pass
+            
+            try:
+                result = subprocess.run(
+                    ['reg', 'query', 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Google Chrome', '/v', 'version'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    match = re.search(r'version\s+REG_SZ\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                    if match:
+                        return match.group(1)
+            except:
+                pass
+            
+            # Try reading from Chrome executable using wmic (more reliable on Windows)
+            try:
+                result = subprocess.run(
+                    ['wmic', 'datafile', 'where', 'name="C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"', 'get', 'Version', '/value'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if line.startswith('Version='):
+                            version = line.split('=')[1].strip()
+                            if version:
+                                return version
+            except:
+                pass
+            
+            # Fallback: Try reading from Chrome executable using PowerShell
+            chrome_paths = [
+                os.path.expanduser("~\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe"),
+                "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+            ]
+            for chrome_path in chrome_paths:
+                if os.path.exists(chrome_path):
+                    try:
+                        result = subprocess.run(
+                            ['powershell', '-Command', f'(Get-Item "{chrome_path}").VersionInfo.FileVersion'],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if result.returncode == 0:
+                            version = result.stdout.strip()
+                            if version:
+                                return version
+                    except:
+                        pass
+        elif system == "Darwin":  # macOS
+            try:
+                result = subprocess.run(
+                    ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '--version'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                    if match:
+                        return match.group(1)
+            except:
+                pass
+        else:  # Linux
+            try:
+                result = subprocess.run(
+                    ['google-chrome', '--version'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                    if match:
+                        return match.group(1)
+            except:
+                pass
+    except Exception as e:
+        print(f"Could not detect Chrome version: {e}")
+    return None
+
+
 def get_chromedriver_path():
-    """Get ChromeDriver path, handling webdriver-manager bug"""
+    """Get ChromeDriver path, handling webdriver-manager bug and version compatibility"""
     try:
         from webdriver_manager.chrome import ChromeDriverManager
         import os
+        import shutil
         
-        # Get the cache directory
+        # Get Chrome version to ensure compatibility
+        chrome_version = get_chrome_version()
+        if chrome_version:
+            print(f"Detected Chrome version: {chrome_version}")
+            # Extract major version (e.g., 143.0.7499.193 -> 143)
+            major_version = chrome_version.split('.')[0]
+            print(f"Chrome major version: {major_version}")
+        else:
+            print("Could not detect Chrome version, will download latest compatible ChromeDriver")
+        
+        # Clear cache to force fresh download for compatibility
         cache_dir = os.path.expanduser("~/.wdm")
-        driver_path = ChromeDriverManager().install()
+        if os.path.exists(cache_dir):
+            try:
+                # Clear ChromeDriver cache to force fresh download
+                chromedriver_cache = os.path.join(cache_dir, "drivers", "chromedriver")
+                if os.path.exists(chromedriver_cache):
+                    print("Clearing old ChromeDriver cache to ensure compatibility...")
+                    import shutil
+                    try:
+                        shutil.rmtree(chromedriver_cache)
+                    except:
+                        pass  # Ignore if can't delete
+            except:
+                pass
+        
+        print("Downloading/updating ChromeDriver to match Chrome version...")
+        
+        # Force download with version detection
+        driver_manager = ChromeDriverManager()
+        driver_path = driver_manager.install()
         
         # Check if it's actually the chromedriver executable
         if os.path.isfile(driver_path) and os.access(driver_path, os.X_OK):
@@ -630,6 +763,12 @@ def create_chrome_driver():
     # Set page load strategy to 'eager' for faster loading (don't wait for all resources)
     chrome_options.page_load_strategy = 'eager'
     
+    # Add timeout and connection settings
+    chrome_options.add_argument("--timeout=60")
+    chrome_options.add_argument("--page-load-strategy=eager")
+    chrome_options.add_argument("--disable-plugins-discovery")
+    chrome_options.add_argument("--disable-background-networking")
+    
     # VPN/Proxy support
     if VPN_PROXY:
         print(f"Using VPN proxy: {VPN_PROXY}")
@@ -644,17 +783,24 @@ def create_chrome_driver():
         print("💡 Tip: Install a VPN extension in the scraper's Chrome for easy VPN access")
     
     try:
-        # Try to get ChromeDriver path
+        # Try to get ChromeDriver path with version detection
+        print("Detecting Chrome version and downloading compatible ChromeDriver...")
         driver_path = get_chromedriver_path()
         
         if driver_path and os.path.exists(driver_path):
             print(f"Using ChromeDriver: {driver_path}")
             service = Service(driver_path)
+            # Set service timeout
+            service.service_args = ['--timeout=60']
             driver = webdriver.Chrome(service=service, options=chrome_options)
         else:
             # Fallback: let Selenium find ChromeDriver automatically
-            print("Using system ChromeDriver...")
+            print("Using system ChromeDriver (auto-detected)...")
             driver = webdriver.Chrome(options=chrome_options)
+        
+        # Set timeouts for the driver
+        driver.set_page_load_timeout(60)  # 60 seconds for page load
+        driver.implicitly_wait(10)  # 10 seconds implicit wait
         
         print("Chrome driver created successfully")
         return driver
@@ -662,20 +808,71 @@ def create_chrome_driver():
     except Exception as e:
         error_msg = str(e)
         
-        # Provide helpful error message
-        if "chromedriver" in error_msg.lower() or "executable" in error_msg.lower():
+        # Check for ChromeDriver compatibility issues
+        if "chromedriver" in error_msg.lower() or "executable" in error_msg.lower() or "version" in error_msg.lower():
+            chrome_version = get_chrome_version()
+            version_info = f"\nDetected Chrome version: {chrome_version}\n" if chrome_version else "\n"
+            
             raise Exception(
-                f"ChromeDriver error: {error_msg}\n\n"
+                f"ChromeDriver compatibility error: {error_msg}\n\n"
+                f"{version_info}"
                 f"SOLUTION:\n"
-                f"1. Make sure Chrome browser is installed\n"
-                f"2. The app will try to download ChromeDriver automatically\n"
-                f"3. If it fails, you can manually install ChromeDriver:\n"
-                f"   - Download from: https://chromedriver.chromium.org/\n"
-                f"   - Extract and add to PATH\n\n"
-                f"Original error: {error_msg}"
+                f"1. The app will automatically download compatible ChromeDriver\n"
+                f"2. Make sure Chrome browser is installed and up to date\n"
+                f"3. If automatic download fails:\n"
+                f"   - Clear cache: Delete ~/.wdm folder\n"
+                f"   - Restart the app - it will download fresh ChromeDriver\n"
+                f"   - Check internet connection for ChromeDriver download\n\n"
+                f"Original error: {error_msg[:300]}"
+            )
+        elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+            raise Exception(
+                f"Connection timeout: {error_msg}\n\n"
+                f"This usually means VPN is not connected.\n\n"
+                f"SOLUTION:\n"
+                f"1. Check VPN connection\n"
+                f"2. If using proxy, verify VPN_PROXY in .env file\n"
+                f"3. Test VPN by accessing the site manually in browser\n"
+                f"4. Try again after ensuring VPN is active\n\n"
+                f"Original error: {error_msg[:300]}"
             )
         else:
             raise Exception(f"Failed to initialize Chrome driver: {error_msg}")
+
+
+def load_page_with_retry(driver, url, max_retries=3, timeout=60):
+    """Load a page with retry logic for connection timeouts"""
+    for attempt in range(max_retries):
+        try:
+            print(f"Loading {url} (attempt {attempt + 1}/{max_retries})...")
+            driver.set_page_load_timeout(timeout)
+            driver.get(url)
+            return True
+        except Exception as e:
+            error_msg = str(e)
+            if 'timeout' in error_msg.lower() or 'connection' in error_msg.lower():
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, 15s
+                    print(f"Connection timeout, retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(
+                        f"Connection timeout after {max_retries} attempts.\n\n"
+                        f"This usually means:\n"
+                        f"1. VPN is not connected or not working\n"
+                        f"2. Network connection is unstable\n"
+                        f"3. The website is blocking the connection\n\n"
+                        f"SOLUTION:\n"
+                        f"1. Check VPN connection\n"
+                        f"2. Verify you can access the site manually in browser\n"
+                        f"3. If using proxy, check VPN_PROXY in .env file\n"
+                        f"4. Try again after ensuring VPN is active\n\n"
+                        f"Original error: {error_msg}"
+                    )
+            else:
+                raise
+    return False
 
 
 @app.route('/')
@@ -969,6 +1166,222 @@ def download_excel():
     return jsonify({'error': 'Excel file not found. Please scrape leads first.'}), 404
 
 
+@app.route('/update-sheet', methods=['POST'])
+def update_sheet():
+    """Update Google Sheet with extracted leads in Excel format"""
+    try:
+        # Get leads from session
+        lead_file_id = session.get('lead_file_id')
+        lead_file_path = None
+        
+        if lead_file_id:
+            lead_file_path = os.path.join(LEADS_STORAGE_DIR, f"{lead_file_id}.json")
+            if not os.path.exists(lead_file_path):
+                lead_file_path = None  # Try fallback
+        
+        # Fallback: find the latest lead file
+        if not lead_file_path or not os.path.exists(lead_file_path):
+            try:
+                if os.path.exists(LEADS_STORAGE_DIR):
+                    lead_files = [f for f in os.listdir(LEADS_STORAGE_DIR) 
+                                 if f.endswith('.json') and not f.startswith('.')]
+                    if lead_files:
+                        # Sort by modification time, get the latest
+                        lead_files.sort(key=lambda x: os.path.getmtime(
+                            os.path.join(LEADS_STORAGE_DIR, x)), reverse=True)
+                        latest_file = lead_files[0]
+                        lead_file_path = os.path.join(LEADS_STORAGE_DIR, latest_file)
+                        print(f"Using latest lead file: {latest_file}")
+            except Exception as e:
+                print(f"Error finding latest lead file: {e}")
+        
+        leads = []
+        
+        # Try to load from JSON file
+        if lead_file_path and os.path.exists(lead_file_path):
+            try:
+                with open(lead_file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    leads = data.get('leads', [])
+                    print(f"Loaded {len(leads)} leads from JSON file")
+            except Exception as e:
+                print(f"Error loading JSON file: {e}")
+        
+        # Fallback: Read from Excel file if JSON not found
+        if not leads or len(leads) == 0:
+            print("No leads from JSON, trying to read from Excel file...")
+            try:
+                # Try to get Excel filename from session
+                excel_filename = session.get('excel_filename')
+                excel_file_path = None
+                project_dir = os.path.dirname(__file__)
+                
+                print(f"Session excel_filename: {excel_filename}")
+                print(f"Project directory: {project_dir}")
+                
+                if excel_filename:
+                    excel_file_path = os.path.join(project_dir, excel_filename)
+                    print(f"Trying Excel file from session: {excel_file_path}")
+                    if not os.path.exists(excel_file_path):
+                        print(f"Excel file from session not found: {excel_file_path}")
+                        excel_file_path = None
+                    else:
+                        print(f"Found Excel file from session: {excel_file_path}")
+                
+                # If not in session, find latest Excel file
+                if not excel_file_path:
+                    print("Searching for latest Excel file in project directory...")
+                    try:
+                        # Check project directory
+                        all_files = os.listdir(project_dir)
+                        print(f"Files in project directory: {len(all_files)} files")
+                        excel_files = [f for f in all_files 
+                                      if f.startswith(('foreclosure_leads_', 'all_leads_', 'new_leads_')) and f.endswith('.xlsx')]
+                        print(f"Found {len(excel_files)} Excel files matching pattern in project dir")
+                        
+                        # Also check current working directory as fallback
+                        if not excel_files:
+                            cwd = os.getcwd()
+                            print(f"Checking current working directory: {cwd}")
+                            if cwd != project_dir:
+                                try:
+                                    cwd_files = os.listdir(cwd)
+                                    excel_files = [f for f in cwd_files 
+                                                  if f.startswith(('foreclosure_leads_', 'all_leads_', 'new_leads_')) and f.endswith('.xlsx')]
+                                    print(f"Found {len(excel_files)} Excel files in CWD")
+                                    if excel_files:
+                                        project_dir = cwd
+                                except:
+                                    pass
+                        
+                        if excel_files:
+                            excel_files.sort(key=lambda x: os.path.getmtime(
+                                os.path.join(project_dir, x)), reverse=True)
+                            excel_file_path = os.path.join(project_dir, excel_files[0])
+                            print(f"Using latest Excel file: {excel_files[0]} (path: {excel_file_path})")
+                        else:
+                            print("No Excel files found matching pattern")
+                    except Exception as list_error:
+                        print(f"Error listing directory: {list_error}")
+                        import traceback
+                        traceback.print_exc()
+                
+                if excel_file_path and os.path.exists(excel_file_path):
+                    print(f"Reading Excel file: {excel_file_path}")
+                    # Read leads from Excel file
+                    df = pd.read_excel(excel_file_path, engine='openpyxl')
+                    print(f"Excel file read successfully. Shape: {df.shape}")
+                    print(f"Columns: {list(df.columns)}")
+                    
+                    # Drop any completely empty rows
+                    df = df.dropna(how='all')
+                    print(f"After dropping empty rows: {df.shape}")
+                    
+                    # Convert DataFrame to list of dicts, replacing NaN with empty strings
+                    leads = df.fillna('').to_dict('records')
+                    print(f"Converted to {len(leads)} lead records")
+                    
+                    # Filter out completely empty records
+                    leads = [lead for lead in leads if any(str(v).strip() for v in lead.values() if v != '')]
+                    print(f"After filtering empty records: {len(leads)} leads")
+                    
+                    # Ensure column names match expected format
+                    if leads and len(leads) > 0:
+                        # Check if column names need mapping
+                        first_lead = leads[0]
+                        print(f"First lead keys: {list(first_lead.keys())}")
+                        print(f"First lead sample: {dict(list(first_lead.items())[:2])}")
+                else:
+                    print(f"Excel file not found or doesn't exist: {excel_file_path}")
+            except Exception as e:
+                print(f"Error reading Excel file: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        print(f"Final leads count: {len(leads) if leads else 0}")
+        if not leads or len(leads) == 0:
+            # Last resort: Try to read from Excel file using same logic as download-excel
+            print("Last resort: Trying to read Excel file using download-excel logic...")
+            try:
+                excel_filename = session.get('excel_filename')
+                project_dir = os.path.dirname(__file__)
+                
+                if excel_filename:
+                    excel_file_path = os.path.join(project_dir, excel_filename)
+                    if os.path.exists(excel_file_path):
+                        df = pd.read_excel(excel_file_path, engine='openpyxl')
+                        df = df.dropna(how='all')
+                        leads = df.fillna('').to_dict('records')
+                        leads = [lead for lead in leads if any(str(v).strip() for v in lead.values() if v != '')]
+                        print(f"Loaded {len(leads)} leads from session Excel file")
+                
+                # If still no leads, find latest Excel file
+                if (not leads or len(leads) == 0):
+                    excel_files = [f for f in os.listdir(project_dir) 
+                                  if f.startswith(('foreclosure_leads_', 'all_leads_', 'new_leads_')) and f.endswith('.xlsx')]
+                    if excel_files:
+                        excel_files.sort(key=lambda x: os.path.getmtime(os.path.join(project_dir, x)), reverse=True)
+                        latest_file = excel_files[0]
+                        excel_file_path = os.path.join(project_dir, latest_file)
+                        df = pd.read_excel(excel_file_path, engine='openpyxl')
+                        df = df.dropna(how='all')
+                        leads = df.fillna('').to_dict('records')
+                        leads = [lead for lead in leads if any(str(v).strip() for v in lead.values() if v != '')]
+                        print(f"Loaded {len(leads)} leads from latest Excel file: {latest_file}")
+            except Exception as final_error:
+                print(f"Final attempt to read Excel failed: {final_error}")
+                import traceback
+                traceback.print_exc()
+        
+        if not leads or len(leads) == 0:
+            error_msg = 'No leads found. Please scrape leads first. (Checked JSON files and Excel files)'
+            print(f"ERROR: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 400
+        
+        # Check Google Sheets configuration
+        if not GoogleSheetsHandler:
+            return jsonify({'success': False, 'error': 'Google Sheets handler not available. Install gspread and google-auth.'}), 500
+        
+        spreadsheet_id = os.getenv('GOOGLE_SHEETS_ID')
+        if not spreadsheet_id:
+            return jsonify({'success': False, 'error': 'GOOGLE_SHEETS_ID not set in environment variables.'}), 400
+        
+        credentials_path = os.getenv('GOOGLE_CREDENTIALS_PATH', 'credentials.json')
+        credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        
+        if not os.path.exists(credentials_path) and not credentials_json:
+            return jsonify({'success': False, 'error': f'Credentials file not found at {credentials_path} and GOOGLE_CREDENTIALS_JSON not set.'}), 400
+        
+        # Initialize Google Sheets handler
+        handler = GoogleSheetsHandler(
+            credentials_path=credentials_path if os.path.exists(credentials_path) else None,
+            spreadsheet_id=spreadsheet_id,
+            credentials_json=credentials_json
+        )
+        
+        # Authenticate and get spreadsheet
+        handler.authenticate()
+        handler.get_or_create_spreadsheet()
+        
+        # Append leads in Excel format
+        total_added = handler.append_leads_excel_format(leads)
+        spreadsheet_url = handler.get_spreadsheet_url()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully updated Google Sheet with {total_added} leads.',
+            'total_added': total_added,
+            'spreadsheet_url': spreadsheet_url
+        })
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error updating Google Sheet: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+
 @app.route('/api/check-new-leads')
 def check_new_leads():
     """Check if there are new leads and return current count"""
@@ -1030,10 +1443,10 @@ def scrape_data():
         
         # First, get all town names from the main page
         print(f"Loading main page: {TARGET_URL}")
-        driver.get(TARGET_URL)
+        load_page_with_retry(driver, TARGET_URL, max_retries=3, timeout=60)
         
         # Wait for the page to load
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 30)  # Increased timeout
         wait.until(EC.presence_of_element_located((By.ID, "ctl00_cphBody_Panel1")))
         
         # Parse HTML to get all town names
@@ -1089,7 +1502,7 @@ def scrape_data():
                 # Navigate to the town's detail page
                 print(f"  Navigating to {town_name}...")
                 try:
-                    driver.get(town_url)
+                    load_page_with_retry(driver, town_url, max_retries=2, timeout=45)
                 except Exception as nav_error:
                     print(f"  Navigation error for {town_name}: {nav_error}")
                     # Try to continue with next town
@@ -1245,6 +1658,29 @@ def scrape_data():
         if excel_filename:
             session['excel_filename'] = excel_filename
         
+        # Save leads to JSON file for update-sheet functionality
+        if all_leads:
+            try:
+                lead_file_id = str(uuid.uuid4())
+                lead_file_path = os.path.join(LEADS_STORAGE_DIR, f"{lead_file_id}.json")
+                
+                lead_data = {
+                    'leads': all_leads,
+                    'lead_count': len(all_leads),
+                    'scraped_at': datetime.now().isoformat(),
+                    'excel_filename': excel_filename
+                }
+                
+                with open(lead_file_path, 'w', encoding='utf-8') as f:
+                    json.dump(lead_data, f, indent=2)
+                
+                session['lead_file_id'] = lead_file_id
+                print(f"💾 Saved {len(all_leads)} leads to {lead_file_id}.json")
+            except Exception as e:
+                print(f"⚠️  Warning: Error saving leads to JSON file: {e}")
+                import traceback
+                traceback.print_exc()
+        
         # Return response
         return jsonify({
             'success': True,
@@ -1322,10 +1758,10 @@ def scrape():
         
         # Navigate directly to the URL (simpler approach)
         print(f"Loading URL: {TARGET_URL}")
-        driver.get(TARGET_URL)
+        load_page_with_retry(driver, TARGET_URL, max_retries=3, timeout=60)
         
-        # Wait for the page to load (reduced timeout for faster response)
-        wait = WebDriverWait(driver, 10)
+        # Wait for the page to load
+        wait = WebDriverWait(driver, 30)  # Increased timeout
         wait.until(EC.presence_of_element_located((By.ID, "ctl00_cphBody_Panel1")))
         
         # No additional sleep - parse immediately after element is found
