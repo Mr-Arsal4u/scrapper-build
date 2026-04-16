@@ -42,6 +42,8 @@
         .button-container {
             display: flex;
             justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
             margin-bottom: 30px;
         }
         
@@ -239,11 +241,91 @@
         .view-notice-link:hover {
             text-decoration: underline;
         }
+        
+        .progress-container {
+            display: none;
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        .progress-bar-container {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 0.85em;
+        }
+        
+        .progress-text {
+            text-align: center;
+            color: #666;
+            font-size: 0.95em;
+        }
+        
+        .results-summary {
+            display: none;
+            margin: 20px 0;
+            padding: 20px;
+            background: #e8f5e9;
+            border-radius: 10px;
+            border: 2px solid #4caf50;
+        }
+        
+        .results-summary h3 {
+            color: #2e7d32;
+            margin-bottom: 15px;
+        }
+        
+        .results-summary p {
+            margin: 8px 0;
+            color: #333;
+            font-size: 1em;
+        }
+        
+        .results-summary .sheets-link {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #4caf50;
+            color: white;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: bold;
+            transition: background 0.3s ease;
+        }
+        
+        .results-summary .sheets-link:hover {
+            background: #45a049;
+        }
+        
+        .error-messages {
+            margin-top: 15px;
+            padding: 10px;
+            background: #ffebee;
+            border-radius: 5px;
+            color: #c62828;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🏘️ Town Scraper</h1>
+        <h1>🏘️ Foreclosure Scraper</h1>
         
         <div class="vpn-notice">
             <strong>⚠️ VPN Required:</strong> This website is only accessible through VPN. 
@@ -251,33 +333,25 @@
         </div>
         
         <div class="button-container">
-            <button class="scrape-btn" id="scrapeBtn" onclick="scrapeTowns()">Scrape Towns</button>
-            <button class="scrape-btn" id="extractLeadsBtn" onclick="extractLeads()" style="display: none; background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">Extract Leads</button>
+            <button class="scrape-btn" id="scrapeDataBtn" onclick="scrapeData()">Scrape Data</button>
+            <button class="scrape-btn" id="downloadExcelBtn" onclick="downloadExcel()" style="display: none; background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">📥 Download Excel</button>
+            <button class="scrape-btn" id="updateSheetBtn" onclick="updateSheet()" style="display: none; background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);">📊 Update Sheet</button>
         </div>
         
-        <div class="status-message" id="statusMessage">Ready to scrape towns</div>
+        <div class="status-message" id="statusMessage">Ready to scrape. Click the button above to start.</div>
         
-        <div class="towns-container">
-            <div class="towns-header">
-                <h2>Town Names</h2>
-                <span class="town-count" id="townCount">0 towns</span>
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" id="progressFill">0%</div>
             </div>
-            <div class="towns-list" id="townsList">
-                <div class="empty-state">No towns scraped yet. Click the button above to start.</div>
-            </div>
+            <div class="progress-text" id="progressText">Initializing...</div>
         </div>
         
-        <div class="towns-container" id="leadsContainer" style="display: none; margin-top: 30px;">
-            <div class="towns-header">
-                <h2>Foreclosure Leads</h2>
-                <div style="display: flex; align-items: center; gap: 15px;">
-                    <span class="town-count" id="leadCount">0 leads</span>
-                    <a href="/download-excel" id="downloadExcelBtn" style="display: none; background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 10px 20px; border-radius: 25px; text-decoration: none; font-weight: bold; font-size: 0.9em;">📥 Download Excel</a>
-                </div>
-            </div>
-            <div class="leads-table-container" id="leadsList">
-                <!-- Leads will be displayed here -->
-            </div>
+        <div class="results-summary" id="resultsSummary">
+            <h3>✓ Scraping Complete</h3>
+            <p>📊 <span id="totalScraped">0</span> total records scraped</p>
+            <p>✅ <span id="newCount">0</span> records saved to Excel</p>
+            <div class="error-messages" id="errorMessages" style="display: none;"></div>
         </div>
     </div>
     
@@ -285,57 +359,7 @@
         // Base URL for constructing links
         const BASE_URL = 'https://sso.eservices.jud.ct.gov/foreclosures/Public';
         
-        // Check if leads are available from server-side file storage on page load
-        {% if leads and leads|length > 0 %}
-        (function() {
-            const leads = {{ leads|tojson }};
-            const leadCount = {{ lead_count }};
-            
-            console.log(`Page loaded with ${leadCount} leads from server`);
-            
-            // Display leads automatically when page loads
-            function displayLeadsOnLoad() {
-                if (typeof displayLeads === 'function') {
-                    displayLeads(leads);
-                    const leadCountEl = document.getElementById('leadCount');
-                    const leadsContainer = document.getElementById('leadsContainer');
-                    const statusMsg = document.getElementById('statusMessage');
-                    
-                    if (leadCountEl) leadCountEl.textContent = `${leadCount} leads`;
-                    if (leadsContainer) leadsContainer.style.display = 'block';
-                    
-                    // Show download button
-                    const downloadBtn = document.getElementById('downloadExcelBtn');
-                    if (downloadBtn) downloadBtn.style.display = 'inline-block';
-                    
-                    if (statusMsg) {
-                        statusMsg.textContent = `Successfully extracted ${leadCount} leads! Excel file saved.`;
-                        statusMsg.className = 'status-message success';
-                    }
-                    
-                    // Scroll to leads section
-                    setTimeout(() => {
-                        if (leadsContainer) {
-                            leadsContainer.scrollIntoView({ 
-                                behavior: 'smooth', 
-                                block: 'start' 
-                            });
-                        }
-                    }, 300);
-                } else {
-                    // If displayLeads not loaded yet, wait a bit
-                    setTimeout(displayLeadsOnLoad, 100);
-                }
-            }
-            
-            // Try to display immediately
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', displayLeadsOnLoad);
-            } else {
-                displayLeadsOnLoad();
-            }
-        })();
-        {% endif %}
+        // Leads and towns display disabled - only showing stats
         
         // Auto-check for new leads and auto-download when count increases
         let lastKnownCount = {{ lead_count }};
@@ -349,35 +373,21 @@
                 const data = await response.json();
                 
                 const currentCount = data.current_count || 0;
-                const leadCountEl = document.getElementById('leadCount');
                 
-                // Update count display
-                if (leadCountEl && currentCount > 0) {
-                    leadCountEl.textContent = `${currentCount} leads`;
-                }
-                
-                // If count increased, update display and auto-download
+                // If count increased, update stats only (no data display)
                 if (currentCount > lastKnownCount && data.leads && data.leads.length > 0) {
                     console.log(`✅ New leads detected! Count increased from ${lastKnownCount} to ${currentCount}`);
                     
-                    // Update leads display
-                    if (typeof displayLeads === 'function') {
-                        displayLeads(data.leads);
-                        const leadsContainer = document.getElementById('leadsContainer');
-                        if (leadsContainer) {
-                            leadsContainer.style.display = 'block';
-                        }
-                    }
+                    // Leads display disabled - only showing stats
                     
-                    // Update count
-                    if (leadCountEl) {
-                        leadCountEl.textContent = `${currentCount} leads`;
-                    }
-                    
-                    // Show download button
+                    // Show download and update sheet buttons if they exist
                     const downloadBtn = document.getElementById('downloadExcelBtn');
                     if (downloadBtn) {
                         downloadBtn.style.display = 'inline-block';
+                    }
+                    const updateSheetBtn = document.getElementById('updateSheetBtn');
+                    if (updateSheetBtn) {
+                        updateSheetBtn.style.display = 'inline-block';
                     }
                     
                     // Auto-download Excel file
@@ -408,18 +418,210 @@
         // Also check immediately on page load
         setTimeout(checkForNewLeads, 2000);
         
+        async function scrapeData() {
+            const btn = document.getElementById('scrapeDataBtn');
+            const statusMsg = document.getElementById('statusMessage');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const resultsSummary = document.getElementById('resultsSummary');
+            const downloadBtn = document.getElementById('downloadExcelBtn');
+            const updateSheetBtn = document.getElementById('updateSheetBtn');
+            
+            // Check if required elements exist
+            if (!btn || !statusMsg) {
+                console.error('Required UI elements not found');
+                return;
+            }
+            
+            // Reset UI
+            btn.disabled = true;
+            btn.textContent = 'Scraping...';
+            statusMsg.textContent = 'Starting scrape... Please wait.';
+            statusMsg.className = 'status-message loading';
+            if (progressContainer) progressContainer.style.display = 'block';
+            if (resultsSummary) resultsSummary.style.display = 'none';
+            if (progressFill) {
+                progressFill.style.width = '0%';
+                progressFill.textContent = '0%';
+            }
+            if (downloadBtn) downloadBtn.style.display = 'none';
+            if (updateSheetBtn) updateSheetBtn.style.display = 'none';
+            
+            try {
+                if (progressText) progressText.textContent = 'Scraping foreclosure data from all towns...';
+                if (progressFill) {
+                    progressFill.style.width = '30%';
+                    progressFill.textContent = '30%';
+                }
+                
+                const response = await fetch('/scrape-data', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                
+                // Check if response is JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    let errorMsg = '';
+                    
+                    if (response.status === 404) {
+                        errorMsg = 'Server not found. Restart Flask: python app.py';
+                    } else if (response.status === 500) {
+                        errorMsg = 'Server error. Check console.';
+                    } else {
+                        errorMsg = `Server error (${response.status})`;
+                    }
+                    
+                    throw new Error(errorMsg);
+                }
+                
+                let data;
+                try {
+                    data = await response.json();
+                } catch (jsonError) {
+                    throw new Error('Server returned invalid response. Restart Flask server.');
+                }
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to scrape data');
+                }
+                
+                const leadCount = data.lead_count || data.total_scraped || 0;
+                const excelFile = data.excel_file;
+                
+                console.log(`Scraped ${leadCount} foreclosure records`);
+                
+                // Update progress to 100%
+                if (progressFill) {
+                    progressFill.style.width = '100%';
+                    progressFill.textContent = '100%';
+                }
+                if (progressText) progressText.textContent = 'Complete!';
+                
+                // Show success message
+                let successMsg = `✅ Successfully scraped ${leadCount} foreclosure records.`;
+                if (excelFile) {
+                    successMsg += ` Excel file saved: ${excelFile}`;
+                }
+                
+                statusMsg.textContent = successMsg;
+                statusMsg.className = 'status-message success';
+                
+                // Show download and update sheet buttons
+                if (excelFile && downloadBtn) {
+                    downloadBtn.style.display = 'inline-block';
+                }
+                if (excelFile && updateSheetBtn) {
+                    updateSheetBtn.style.display = 'inline-block';
+                }
+                
+                // Show results summary
+                if (resultsSummary) {
+                    resultsSummary.style.display = 'block';
+                }
+                
+                const totalScrapedEl = document.getElementById('totalScraped');
+                const newCountEl = document.getElementById('newCount');
+                if (totalScrapedEl) totalScrapedEl.textContent = leadCount;
+                if (newCountEl) newCountEl.textContent = leadCount;
+                
+            } catch (error) {
+                console.error('Scrape error:', error);
+                if (progressContainer) progressContainer.style.display = 'none';
+                
+                let errorMessage = error.message || 'Failed to scrape data';
+                
+                // Simplify common errors
+                if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
+                    errorMessage = 'Server not running. Start: python app.py';
+                } else if (errorMessage.includes('Unexpected token') || errorMessage.includes('<!doctype')) {
+                    errorMessage = 'Server error. Restart Flask server.';
+                }
+                
+                if (statusMsg) {
+                    statusMsg.textContent = `Error: ${errorMessage}`;
+                    statusMsg.className = 'status-message error';
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Scrape Data';
+                }
+            }
+        }
+        
+        async function downloadExcel() {
+            window.location.href = '/download-excel';
+        }
+        
+        async function updateSheet() {
+            const btn = document.getElementById('updateSheetBtn');
+            const statusMsg = document.getElementById('statusMessage');
+            
+            if (!btn || !statusMsg) {
+                return;
+            }
+            
+            // Disable button and show loading
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+            statusMsg.textContent = 'Updating Google Sheet... Please wait.';
+            statusMsg.className = 'status-message loading';
+            
+            try {
+                const response = await fetch('/update-sheet', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusMsg.textContent = `✅ ${data.message}`;
+                    statusMsg.className = 'status-message success';
+                    
+                    if (data.spreadsheet_url) {
+                        const link = document.createElement('a');
+                        link.href = data.spreadsheet_url;
+                        link.target = '_blank';
+                        link.textContent = 'Open Google Sheet';
+                        link.className = 'sheets-link';
+                        link.style.display = 'inline-block';
+                        link.style.marginTop = '10px';
+                        statusMsg.appendChild(document.createElement('br'));
+                        statusMsg.appendChild(link);
+                    }
+                } else {
+                    statusMsg.textContent = `Error: ${data.error}`;
+                    statusMsg.className = 'status-message error';
+                }
+            } catch (error) {
+                console.error('Update sheet error:', error);
+                let errorMsg = error.message || 'Failed to update sheet';
+                if (errorMsg === 'Failed to fetch' || errorMsg.includes('fetch')) {
+                    errorMsg = 'Cannot connect to server. Make sure Flask server is running.';
+                }
+                statusMsg.textContent = `Error: ${errorMsg}`;
+                statusMsg.className = 'status-message error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📊 Update Sheet';
+            }
+        }
+        
         async function scrapeTowns() {
             const btn = document.getElementById('scrapeBtn');
             const statusMsg = document.getElementById('statusMessage');
-            const townsList = document.getElementById('townsList');
-            const townCount = document.getElementById('townCount');
             
             // Disable button and show loading state
             btn.disabled = true;
             btn.textContent = 'Scraping...';
             statusMsg.textContent = 'Scraping towns... Please wait.';
             statusMsg.className = 'status-message loading';
-            townsList.innerHTML = '';
             
             try {
                 const response = await fetch('/scrape', {
@@ -432,14 +634,7 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    // Display towns
-                    displayTowns(data.towns);
-                    townCount.textContent = `${data.town_count || data.count || 0} towns`;
-                    
-                    // Show Extract Leads button
-                    document.getElementById('extractLeadsBtn').style.display = 'inline-block';
-                    
-                    // Store town names for later use
+                    // Store town names for later use (not displayed)
                     window.scrapedTowns = data.towns;
                     
                     statusMsg.textContent = `Successfully scraped ${data.town_count || data.count || 0} towns! Click "Extract Leads" to get foreclosure data.`;
@@ -448,7 +643,6 @@
                     // Show error
                     statusMsg.textContent = `Error: ${data.error}`;
                     statusMsg.className = 'status-message error';
-                    townsList.innerHTML = '<div class="empty-state">Failed to scrape towns. Please check the error message above.</div>';
                 }
             } catch (error) {
                 console.error('Scrape error:', error);
@@ -458,71 +652,24 @@
                 }
                 statusMsg.innerHTML = `Error: ${errorMsg}`;
                 statusMsg.className = 'status-message error';
-                townsList.innerHTML = '<div class="empty-state">❌ Connection Error<br><br>Make sure:<br>• Flask server is running<br>• Access http://localhost:5000<br>• Check terminal for server errors</div>';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Scrape Towns';
             }
         }
         
+        // Display functions disabled - only showing stats, not data
         function displayTowns(towns) {
-            const townsList = document.getElementById('townsList');
-            
-            if (towns.length === 0) {
-                townsList.innerHTML = '<div class="empty-state">No towns found.</div>';
-                return;
-            }
-            
-            townsList.innerHTML = towns.map(town => 
-                `<div class="town-item">${town}</div>`
-            ).join('');
+            // Do nothing - towns not displayed on page
         }
         
         function displayLeads(leads) {
-            const leadsList = document.getElementById('leadsList');
-            
-            if (leads.length === 0) {
-                leadsList.innerHTML = '<div class="empty-state">No leads found.</div>';
-                return;
-            }
-            
-            let html = '<table class="leads-table"><thead><tr><th>#</th><th>Town</th><th>Sale Date</th><th>Docket Number</th><th>Address</th><th>Sale Type</th><th>View Notice</th></tr></thead><tbody>';
-            
-            leads.forEach((lead, index) => {
-                const viewLink = lead.view_notice_url 
-                    ? `<a href="${lead.view_notice_url}" target="_blank" class="view-notice-link">View</a>`
-                    : '-';
-                
-                // Use docket_url if available, otherwise construct it
-                const docketUrl = lead.docket_url || 
-                    (lead.docket_number ? `${BASE_URL}/PendPostbyDocketNo.aspx?DocketNo=${lead.docket_number}` : '');
-                const docketLink = lead.docket_number && docketUrl
-                    ? `<a href="${docketUrl}" target="_blank" class="docket-link">${lead.docket_number}</a>`
-                    : (lead.docket_number || '-');
-                
-                // Add alternating row colors for better readability
-                const rowClass = index % 2 === 0 ? '' : 'style="background-color: #f8f9fa;"';
-                
-                html += `<tr ${rowClass}>
-                    <td>${lead.row_number || '-'}</td>
-                    <td>${lead.town || '-'}</td>
-                    <td>${lead.sale_date || '-'}</td>
-                    <td>${docketLink}</td>
-                    <td>${lead.address || '-'}</td>
-                    <td>${lead.sale_type || '-'}</td>
-                    <td>${viewLink}</td>
-                </tr>`;
-            });
-            
-            html += '</tbody></table>';
-            leadsList.innerHTML = html;
+            // Do nothing - leads not displayed on page
         }
         
         async function extractLeads() {
             const btn = document.getElementById('extractLeadsBtn');
             const statusMsg = document.getElementById('statusMessage');
-            const leadsList = document.getElementById('leadsList');
-            const leadCount = document.getElementById('leadCount');
             
             // Check if towns are available
             if (!window.scrapedTowns || window.scrapedTowns.length === 0) {
@@ -536,7 +683,6 @@
             btn.textContent = 'Extracting Leads...';
             statusMsg.textContent = `Extracting leads from ${window.scrapedTowns.length} towns... Please wait.`;
             statusMsg.className = 'status-message loading';
-            leadsList.innerHTML = '<div class="empty-state">Extracting leads...</div>';
             
             try {
                 const response = await fetch('/scrape-leads', {
@@ -552,27 +698,36 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    // Always redirect/reload to show results from file storage
+                    // Show stats only, no data display
                     const leadCount = data.lead_count || data.leads?.length || 0;
-                    statusMsg.textContent = `✅ Scraping completed! Found ${leadCount} leads. Redirecting...`;
+                    statusMsg.textContent = `✅ Scraping completed! Found ${leadCount} leads.`;
                     statusMsg.className = 'status-message success';
                     
-                    // Force redirect to home page to show results
-                    console.log(`✅ Scraping completed with ${leadCount} leads. Redirecting to show results...`);
-                    
-                    // Ensure redirect happens - use replace to avoid back button issues
-                    setTimeout(() => {
-                        console.log('Executing redirect now...');
-                        window.location.replace('/');
-                    }, 1000);
-                    
-                    // Don't execute finally block - we're redirecting
-                    return;
+                    // Show results summary with stats
+                    const resultsSummary = document.getElementById('resultsSummary');
+                    if (resultsSummary) {
+                        resultsSummary.style.display = 'block';
+                        const newCount = data.new_added || 0;
+                        const duplicateCount = data.duplicates_skipped || 0;
+                        const totalScraped = data.total_scraped || leadCount;
+                        
+                        const newCountEl = document.getElementById('newCount');
+                        const totalScrapedEl = document.getElementById('totalScraped');
+                        if (newCountEl) newCountEl.textContent = newCount;
+                        if (totalScrapedEl) totalScrapedEl.textContent = totalScraped;
+                        
+                        if (data.spreadsheet_url) {
+                            const sheetsLink = document.getElementById('sheetsLink');
+                            if (sheetsLink) {
+                                sheetsLink.href = data.spreadsheet_url;
+                                sheetsLink.style.display = 'inline-block';
+                            }
+                        }
+                    }
                 } else {
                     // Show error
                     statusMsg.textContent = `Error: ${data.error}`;
                     statusMsg.className = 'status-message error';
-                    leadsList.innerHTML = '<div class="empty-state">Failed to extract leads. Please check the error message above.</div>';
                 }
             } catch (error) {
                 console.error('Extract leads error:', error);
@@ -582,7 +737,6 @@
                 }
                 statusMsg.innerHTML = `Error: ${errorMsg}`;
                 statusMsg.className = 'status-message error';
-                leadsList.innerHTML = '<div class="empty-state">❌ Connection Error<br><br>Make sure Flask server is running</div>';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Extract Leads';
