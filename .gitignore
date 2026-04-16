@@ -1,12 +1,18 @@
 # Environment variables
 .env
 
+# Google Sheets credentials
+credentials.json
+
 # Scraper Chrome profile
 .scraper-chrome-profile/
 
 # Scraped data
 scraped_data/
 temp_leads/
+
+# Logs
+logs/
 
 # Python
 __pycache__/
