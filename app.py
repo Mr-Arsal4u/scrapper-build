@@ -669,22 +669,6 @@ def get_chromedriver_path():
         else:
             print("Could not detect Chrome version, will download latest compatible ChromeDriver")
         
-        # Clear cache to force fresh download for compatibility
-        cache_dir = os.path.expanduser("~/.wdm")
-        if os.path.exists(cache_dir):
-            try:
-                # Clear ChromeDriver cache to force fresh download
-                chromedriver_cache = os.path.join(cache_dir, "drivers", "chromedriver")
-                if os.path.exists(chromedriver_cache):
-                    print("Clearing old ChromeDriver cache to ensure compatibility...")
-                    import shutil
-                    try:
-                        shutil.rmtree(chromedriver_cache)
-                    except:
-                        pass  # Ignore if can't delete
-            except:
-                pass
-        
         print("Downloading/updating ChromeDriver to match Chrome version...")
         
         # Force download with version detection
