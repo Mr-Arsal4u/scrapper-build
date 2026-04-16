@@ -51,6 +51,7 @@ import uuid
 from datetime import datetime, timedelta
 import pandas as pd
 import threading
+import tempfile
 
 # Load environment variables from .env file if it exists
 try:
@@ -720,7 +721,8 @@ def create_chrome_driver():
     # Add timestamp to make it unique if needed
     import uuid
     unique_profile = f"{SCRAPER_CHROME_PROFILE}-{uuid.uuid4().hex[:8]}"
-    chrome_options.add_argument(f"--user-data-dir={SCRAPER_CHROME_PROFILE}")
+    # chrome_options.add_argument(f"--user-data-dir={SCRAPER_CHROME_PROFILE}")
+    chrome_options.add_argument(f"--user-data-dir={tempfile.mkdtemp()}")
     
     # Kill any existing Chrome instances using this profile
     try:
@@ -741,6 +743,10 @@ def create_chrome_driver():
     chrome_options.add_argument("--single-process")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--disable-setuid-sandbox")
+    chrome_options.add_argument("--no-zygote")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument(f"--crash-dumps-dir={tempfile.gettempdir()}")
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
