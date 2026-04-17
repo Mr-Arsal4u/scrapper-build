@@ -43,6 +43,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchWindowException
 from bs4 import BeautifulSoup
 import os
 import time
@@ -54,6 +55,7 @@ import pandas as pd
 import threading
 import tempfile
 import logging
+from urllib.parse import urljoin
 # import traceback (already imported as tb_module above)
 
 # Define a function to get formatted traceback safely
@@ -282,6 +284,73 @@ def is_driver_session_valid(driver):
         return True
     except:
         return False
+
+
+def ensure_chrome_window(driver, timeout=25):
+    """
+    Chrome sometimes starts with no usable window when flags/profile conflict.
+    Wait for at least one handle and focus it to avoid 'no such window' on first navigation.
+    """
+    try:
+        WebDriverWait(driver, timeout).until(lambda d: len(d.window_handles) >= 1)
+        driver.switch_to.window(driver.window_handles[0])
+    except TimeoutException as e:
+        raise Exception(
+            "Chrome started without any browser window. "
+            "Close any other Chrome using the scraper profile "
+            f"({SCRAPER_CHROME_PROFILE}) and try again."
+        ) from e
+
+
+def collect_town_targets(driver):
+    """
+    Build town name + detail URL list from the main list page.
+    Uses BeautifulSoup first, then Selenium (case-insensitive hrefs, real resolved URLs).
+    """
+    seen = set()
+    targets = []
+
+    def add_target(name, url):
+        if not name or not url:
+            return
+        url = url.strip()
+        if url in seen:
+            return
+        seen.add(url)
+        targets.append({"name": name, "url": url})
+
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    panel = soup.find("div", id="ctl00_cphBody_Panel1")
+    if panel:
+        for link in panel.find_all("a", href=True):
+            href = (link.get("href") or "").strip()
+            hl = href.lower()
+            if "pendpostbytowndetails" not in hl or "town=" not in hl:
+                continue
+            name = link.get_text(strip=True)
+            full = urljoin(TARGET_URL, href)
+            add_target(name, full)
+
+    if not targets:
+        try:
+            anchors = driver.find_elements(
+                By.CSS_SELECTOR,
+                "#ctl00_cphBody_Panel1 a[href*='PendPostbyTownDetails'], "
+                "#ctl00_cphBody_Panel1 a[href*='pendpostbytowndetails']",
+            )
+            for el in anchors:
+                href = (el.get_attribute("href") or "").strip()
+                if not href:
+                    continue
+                hl = href.lower()
+                if "town=" not in hl:
+                    continue
+                name = (el.text or "").strip()
+                add_target(name, href)
+        except Exception as e:
+            logger.warning("Selenium town link fallback failed: %s", e)
+
+    return targets
 
 
 def scrape_town_leads_from_page(driver, town_name, extraction_time):
@@ -811,20 +880,23 @@ def create_chrome_driver():
     logger.info("Initializing Chrome Options...")
     chrome_options = Options()
     
-    # Use separate profile for scraping (doesn't interfere with user's Chrome)
-    # This profile can have VPN extensions installed
-    # Add timestamp to make it unique if needed
-    # chrome_options.add_argument(f"--user-data-dir={SCRAPER_CHROME_PROFILE}")
-    temp_profile_dir = tempfile.mkdtemp()
-    logger.info(f"Using temporary profile directory: {temp_profile_dir}")
-    chrome_options.add_argument(f"--user-data-dir={temp_profile_dir}")
+    # Use persistent scraper profile so VPN extension/session can be reused.
+    # If an explicit proxy is configured, isolate with a temp profile.
+    use_temp_profile = bool(VPN_PROXY)
+    profile_dir = tempfile.mkdtemp() if use_temp_profile else SCRAPER_CHROME_PROFILE
+    logger.info(f"Using Chrome profile directory: {profile_dir}")
+    chrome_options.add_argument(f"--user-data-dir={profile_dir}")
     # #region agent log
     debug_log(
         run_id="pre-fix",
         hypothesis_id="H2",
         location="app.py:create_chrome_driver:temp_profile",
-        message="Temporary profile directory created",
-        data={"temp_profile_dir": temp_profile_dir, "exists": os.path.isdir(temp_profile_dir)}
+        message="Chrome profile directory selected",
+        data={
+            "profile_dir": profile_dir,
+            "is_temp_profile": use_temp_profile,
+            "exists": os.path.isdir(profile_dir)
+        }
     )
     # #endregion
     
@@ -847,12 +919,13 @@ def create_chrome_driver():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--disable-extensions")
+    # Keep extensions enabled unless an explicit proxy mode is used.
+    if use_temp_profile:
+        chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--no-first-run")
     chrome_options.add_argument("--no-default-browser-check")
-    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
-    chrome_options.add_argument("--remote-debugging-pipe")
+    # Avoid --remote-debugging-pipe: it can break Selenium sessions on Windows (window closes / no such window).
     crash_dump_dir = tempfile.gettempdir()
     logger.info(f"Setting crash dumps directory to: {crash_dump_dir}")
     chrome_options.add_argument(f"--crash-dumps-dir={crash_dump_dir}")
@@ -931,8 +1004,10 @@ def create_chrome_driver():
         # Set timeouts for the driver
         logger.info("Setting driver timeouts...")
         driver.set_page_load_timeout(60)  # 60 seconds for page load
-        driver.implicitly_wait(10)  # 10 seconds implicit wait
-        
+        driver.implicitly_wait(5)
+
+        ensure_chrome_window(driver)
+
         logger.info("Chrome driver created successfully")
         # #region agent log
         debug_log(
@@ -985,13 +1060,23 @@ def create_chrome_driver():
                 f"3. Test VPN by accessing the site manually\n\n"
                 f"Technical details: {error_msg}"
             )
+        elif (
+            "no such window" in error_msg_lower
+            or "target window already closed" in error_msg_lower
+            or "web view not found" in error_msg_lower
+        ):
+            raise Exception(
+                "Chrome closed or lost the automation window. "
+                f"Close any other Chrome using the same profile ({SCRAPER_CHROME_PROFILE}), "
+                "then try again.\n\n"
+                f"Technical details: {error_msg}"
+            )
         # Check for ChromeDriver compatibility issues
         elif (
             "session not created" in error_msg_lower
             or "only supports chrome version" in error_msg_lower
             or "chromedriver" in error_msg_lower
             or "executable needs to be in path" in error_msg_lower
-            or "no such window" in error_msg_lower
             or "unable to discover open window" in error_msg_lower
         ):
             chrome_version = get_chrome_version()
@@ -1023,7 +1108,20 @@ def load_page_with_retry(driver, url, max_retries=3, timeout=60):
             return True
         except Exception as e:
             error_msg = str(e)
-            if 'timeout' in error_msg.lower() or 'connection' in error_msg.lower():
+            err_low = error_msg.lower()
+            if "no such window" in err_low or "target window already closed" in err_low:
+                raise Exception(
+                    "Chrome closed the automation window mid-load. "
+                    f"Close any manual Chrome using the scraper profile ({SCRAPER_CHROME_PROFILE}), "
+                    "then try again.\n\n"
+                    f"Original error: {error_msg}"
+                )
+            if "timeout" in err_low:
+                try:
+                    driver.execute_script("window.stop();")
+                except Exception:
+                    pass
+            if 'timeout' in err_low or 'connection' in err_low:
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, 15s
                     print(f"Connection timeout, retrying in {wait_time} seconds...")
@@ -1616,9 +1714,14 @@ def scrape_data():
         
         # Wait for the page to load
         wait = WebDriverWait(driver, 30)  # Increased timeout
-        wait.until(EC.presence_of_element_located((By.ID, "ctl00_cphBody_Panel1")))
+        try:
+            wait.until(EC.presence_of_element_located((By.ID, "ctl00_cphBody_Panel1")))
+        except TimeoutException:
+            return jsonify({
+                'success': False,
+                'error': 'Town list did not load in time. Check VPN, then try again.'
+            }), 400
         
-        # Parse HTML to get all town names
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         panel = soup.find('div', id='ctl00_cphBody_Panel1')
         
@@ -1627,47 +1730,40 @@ def scrape_data():
                 'success': False,
                 'error': 'Could not find the towns panel. The page structure may have changed or VPN is not connected.'
             }), 400
+
+        town_targets = collect_town_targets(driver)
         
-        # Extract all town names from links
-        town_links = panel.find_all('a')
-        town_names = []
-        for link in town_links:
-            town_name = link.get_text(strip=True)
-            if town_name:
-                town_names.append(town_name)
-        
-        if not town_names:
+        if not town_targets:
             return jsonify({
                 'success': False,
                 'error': 'No town names found. Please verify VPN is connected and the page loaded correctly.'
             }), 400
         
-        print(f"Found {len(town_names)} towns. Starting to scrape foreclosure data...")
+        print(f"Found {len(town_targets)} towns. Starting to scrape foreclosure data...")
         
         # Initialize progress tracking
         scraping_progress['current'] = 0
-        scraping_progress['total'] = len(town_names)
+        scraping_progress['total'] = len(town_targets)
         scraping_progress['current_town'] = ''
         scraping_progress['leads_found'] = 0
         scraping_progress['status'] = 'scraping'
         
         # Scrape leads from each town's detail page
         all_leads = []
-        print(f"\nScraping foreclosure data from {len(town_names)} towns...")
+        print(f"\nScraping foreclosure data from {len(town_targets)} towns...")
         
         # Process all towns by navigating to each URL directly
-        for i, town_name in enumerate(town_names, 1):
+        for i, town_target in enumerate(town_targets, 1):
+            town_name = town_target["name"]
+            town_url = town_target["url"]
             # Update progress
             scraping_progress['current'] = i
             scraping_progress['current_town'] = town_name
             scraping_progress['leads_found'] = len(all_leads)
             
-            print(f"[{i}/{len(town_names)}] Processing {town_name}...")
+            print(f"[{i}/{len(town_targets)}] Processing {town_name}...")
             
             try:
-                # Construct the town detail URL
-                town_url = f"{BASE_URL}/PendPostbyTownDetails.aspx?town={town_name}"
-                
                 # Navigate to the town's detail page
                 print(f"  Navigating to {town_name}...")
                 try:
@@ -1881,12 +1977,21 @@ def scrape_data():
                           f"3. If using system VPN, ensure it's connected\n" \
                           f"4. Verify you can access the website manually"
         elif (
+            'no such window' in error_message_lower
+            or 'target window already closed' in error_message_lower
+            or 'web view not found' in error_message_lower
+        ):
+            error_message = (
+                "Chrome closed or lost the automation window. "
+                f"Close any other Chrome using the scraper profile "
+                f"({SCRAPER_CHROME_PROFILE}), then try again.\n\n"
+                f"Details: {error_message}"
+            )
+        elif (
             'session not created' in error_message_lower
             or 'only supports chrome version' in error_message_lower
             or 'chromedriver' in error_message_lower
-            or 'no such window' in error_message_lower
             or 'unable to discover open window' in error_message_lower
-            or 'stacktrace' in error_message_lower
             or '#0 0x' in error_message
         ):
             error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
@@ -1940,14 +2045,16 @@ def scrape():
         
         # Wait for the page to load
         wait = WebDriverWait(driver, 30)  # Increased timeout
-        wait.until(EC.presence_of_element_located((By.ID, "ctl00_cphBody_Panel1")))
-        
-        # No additional sleep - parse immediately after element is found
-        
-        # Parse HTML with BeautifulSoup
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        try:
+            wait.until(EC.presence_of_element_located((By.ID, "ctl00_cphBody_Panel1")))
+        except TimeoutException:
+            return jsonify({
+                'success': False,
+                'error': 'Town list did not load in time. Check VPN, then try again.'
+            }), 400
         
         # Find the panel div containing towns
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
         panel = soup.find('div', id='ctl00_cphBody_Panel1')
         
         # Get scraping tab handle before closing
@@ -1966,15 +2073,8 @@ def scrape():
                 'error': 'Could not find the towns panel. The page structure may have changed or VPN is not connected.'
             }), 400
         
-        # Extract all <a> tags inside the panel
-        town_links = panel.find_all('a')
-        town_names = []
-        
-        for link in town_links:
-            town_name = link.get_text(strip=True)
-            # Only add non-empty town names
-            if town_name:
-                town_names.append(town_name)
+        town_targets = collect_town_targets(driver)
+        town_names = [t["name"] for t in town_targets if t.get("name")]
         
         if not town_names:
             return jsonify({
@@ -2074,12 +2174,21 @@ def scrape():
                           f"3. If using system VPN, ensure it's connected\n" \
                           f"4. Verify you can access the website manually"
         elif (
+            'no such window' in error_message_lower
+            or 'target window already closed' in error_message_lower
+            or 'web view not found' in error_message_lower
+        ):
+            error_message = (
+                "Chrome closed or lost the automation window. "
+                f"Close any other Chrome using the scraper profile "
+                f"({SCRAPER_CHROME_PROFILE}), then try again.\n\n"
+                f"Details: {error_message}"
+            )
+        elif (
             'session not created' in error_message_lower
             or 'only supports chrome version' in error_message_lower
             or 'chromedriver' in error_message_lower
-            or 'no such window' in error_message_lower
             or 'unable to discover open window' in error_message_lower
-            or 'stacktrace' in error_message_lower
             or '#0 0x' in error_message
         ):
             error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
