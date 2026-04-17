@@ -20,14 +20,16 @@ class ForeclosureScraper:
         """Initialize the scraper with Chrome driver"""
         chrome_options = Options()
         if headless:
-            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--headless=new')
+            chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
+        chrome_options.add_argument('--remote-debugging-port=9222')
+
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.wait = WebDriverWait(self.driver, 10)
@@ -236,7 +238,7 @@ class ForeclosureScraper:
 
 if __name__ == "__main__":
     # Test the scraper
-    scraper = ForeclosureScraper(headless=False)
+    scraper = ForeclosureScraper(headless=True)
     try:
         url = "https://sso.eservices.jud.ct.gov/foreclosures/Public/PendPostbyTownList.aspx"
         leads, towns = scraper.scrape_all_leads(url)
