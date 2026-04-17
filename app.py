@@ -36,6 +36,7 @@ FEATURES:
 """
 
 from flask import Flask, render_template, jsonify, request, session, redirect, url_for, send_file
+import traceback as tb_module
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -53,7 +54,14 @@ import pandas as pd
 import threading
 import tempfile
 import logging
-import traceback
+# import traceback (already imported as tb_module above)
+
+# Define a function to get formatted traceback safely
+def get_safe_traceback():
+    try:
+        return tb_module.format_exc()
+    except:
+        return "Could not generate traceback"
 
 # Configure logging
 logging.basicConfig(
@@ -65,6 +73,31 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+DEBUG_LOG_PATH = "debug-5f1f4f.log"
+DEBUG_SESSION_ID = "5f1f4f"
+DEBUG_LOG_FALLBACK_PATH = os.path.join(os.path.dirname(__file__), "debug-5f1f4f.log")
+
+def debug_log(run_id, hypothesis_id, location, message, data=None):
+    """Write NDJSON debug logs for runtime hypothesis validation."""
+    payload = {
+        "sessionId": DEBUG_SESSION_ID,
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data or {},
+        "timestamp": int(time.time() * 1000)
+    }
+    try:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        try:
+            with open(DEBUG_LOG_FALLBACK_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        except Exception as log_error:
+            logger.error(f"Debug log write failed at {location}: {log_error}")
 
 # Load environment variables from .env file if it exists
 try:
@@ -84,8 +117,7 @@ except ImportError as e:
 except Exception as e:
     GoogleSheetsHandler = None
     print(f"⚠️  Warning: Google Sheets handler failed to load. Error: {e}")
-    import traceback
-    traceback.print_exc()
+    tb_module.print_exc()
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this-in-production'  # Required for sessions
@@ -703,6 +735,15 @@ def get_chromedriver_path():
         driver_manager = ChromeDriverManager()
         driver_path = driver_manager.install()
         logger.info(f"webdriver-manager installed driver to: {driver_path}")
+        # #region agent log
+        debug_log(
+            run_id="pre-fix",
+            hypothesis_id="H1",
+            location="app.py:get_chromedriver_path:post_install",
+            message="ChromeDriver manager install result",
+            data={"driver_path": driver_path, "exists": os.path.exists(driver_path)}
+        )
+        # #endregion
         
         # Check if it's actually the chromedriver executable
         if os.path.isfile(driver_path) and os.access(driver_path, os.X_OK):
@@ -713,6 +754,15 @@ def get_chromedriver_path():
                     # ELF binary (Linux) or MZ (Windows) or Mach-O (macOS)
                     if header.startswith(b'\x7fELF') or header.startswith(b'MZ') or header.startswith(b'\xcf\xfa'):
                         logger.info(f"Verified executable at: {driver_path}")
+                        # #region agent log
+                        debug_log(
+                            run_id="pre-fix",
+                            hypothesis_id="H1",
+                            location="app.py:get_chromedriver_path:binary_header",
+                            message="Driver path points to executable binary",
+                            data={"driver_path": driver_path, "header_hex": header.hex()}
+                        )
+                        # #endregion
                         return driver_path
                     else:
                         logger.warning(f"File at {driver_path} is not a valid executable binary")
@@ -729,6 +779,15 @@ def get_chromedriver_path():
                     full_path = os.path.join(root, file)
                     if os.access(full_path, os.X_OK):
                         logger.info(f"Found executable at: {full_path}")
+                        # #region agent log
+                        debug_log(
+                            run_id="pre-fix",
+                            hypothesis_id="H1",
+                            location="app.py:get_chromedriver_path:walk_result",
+                            message="Resolved executable by directory walk",
+                            data={"resolved_path": full_path}
+                        )
+                        # #endregion
                         return full_path
         
         # Fallback: try to find in common locations
@@ -736,7 +795,7 @@ def get_chromedriver_path():
         return driver_path
     except Exception as e:
         logger.error(f"Critical error in get_chromedriver_path: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(tb_module.format_exc())
         return None
 
 
@@ -755,37 +814,45 @@ def create_chrome_driver():
     # Use separate profile for scraping (doesn't interfere with user's Chrome)
     # This profile can have VPN extensions installed
     # Add timestamp to make it unique if needed
-    import uuid
-    unique_profile = f"{SCRAPER_CHROME_PROFILE}-{uuid.uuid4().hex[:8]}"
     # chrome_options.add_argument(f"--user-data-dir={SCRAPER_CHROME_PROFILE}")
     temp_profile_dir = tempfile.mkdtemp()
     logger.info(f"Using temporary profile directory: {temp_profile_dir}")
     chrome_options.add_argument(f"--user-data-dir={temp_profile_dir}")
+    # #region agent log
+    debug_log(
+        run_id="pre-fix",
+        hypothesis_id="H2",
+        location="app.py:create_chrome_driver:temp_profile",
+        message="Temporary profile directory created",
+        data={"temp_profile_dir": temp_profile_dir, "exists": os.path.isdir(temp_profile_dir)}
+    )
+    # #endregion
     
     # Kill any existing Chrome instances using this profile
     try:
         import subprocess
         # Find Chrome processes using this profile
         logger.info(f"Attempting to kill existing Chrome processes using profile: {SCRAPER_CHROME_PROFILE}")
-        subprocess.run(["pkill", "-f", SCRAPER_CHROME_PROFILE], 
-                      stderr=subprocess.DEVNULL, timeout=2)
-        time.sleep(0.5)  # Wait a moment for processes to die
+        # subprocess.run(["pkill", "-f", SCRAPER_CHROME_PROFILE], 
+        #               stderr=subprocess.DEVNULL, timeout=2)
+        # time.sleep(0.5)  # Wait a moment for processes to die
     except Exception as e:
         logger.debug(f"Process cleanup (pkill) failed or not needed: {e}")
     
     # Additional options for stability and compatibility
     logger.info("Setting Chrome flags...")
-    chrome_options.add_argument("--headless")
+    # chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--remote-debugging-port=0")
-    # chrome_options.add_argument("--single-process")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--disable-setuid-sandbox")
-    chrome_options.add_argument("--no-zygote")
     chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--no-first-run")
+    chrome_options.add_argument("--no-default-browser-check")
+    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+    chrome_options.add_argument("--remote-debugging-pipe")
     crash_dump_dir = tempfile.gettempdir()
     logger.info(f"Setting crash dumps directory to: {crash_dump_dir}")
     chrome_options.add_argument(f"--crash-dumps-dir={crash_dump_dir}")
@@ -801,9 +868,7 @@ def create_chrome_driver():
     # Set page load strategy to 'eager' for faster loading (don't wait for all resources)
     chrome_options.page_load_strategy = 'eager'
     
-    # Add timeout and connection settings
-    chrome_options.add_argument("--timeout=60")
-    chrome_options.add_argument("--page-load-strategy=eager")
+    # Add connection settings
     chrome_options.add_argument("--disable-plugins-discovery")
     chrome_options.add_argument("--disable-background-networking")
     
@@ -820,6 +885,15 @@ def create_chrome_driver():
         # No proxy configured - will use VPN extension if installed in Chrome profile
         logger.info("No proxy configured - using system VPN or Chrome extension (if installed)")
     
+    # Check if ChromeDriver binary exists
+    chrome_binary = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    if not os.path.exists(chrome_binary):
+        chrome_binary = "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+    
+    if os.path.exists(chrome_binary):
+        logger.info(f"Setting binary_location to: {chrome_binary}")
+        chrome_options.binary_location = chrome_binary
+    
     try:
         # Try to get ChromeDriver path with version detection
         logger.info("Attempting to get ChromeDriver path...")
@@ -831,6 +905,23 @@ def create_chrome_driver():
             # Set service timeout
             service.service_args = ['--timeout=60']
             logger.info("Starting webdriver.Chrome with service and options...")
+            # #region agent log
+            debug_log(
+                run_id="pre-fix",
+                hypothesis_id="H2,H3,H4",
+                location="app.py:create_chrome_driver:before_webdriver_start",
+                message="Launching webdriver with chrome options",
+                data={
+                    "driver_path": driver_path,
+                    "chrome_binary": chrome_options.binary_location,
+                    "has_headless_flag": "--headless" in chrome_options.arguments,
+                    "has_disable_gpu_flag": "--disable-gpu" in chrome_options.arguments,
+                    "has_disable_extensions_flag": "--disable-extensions" in chrome_options.arguments,
+                    "page_load_strategy": chrome_options.page_load_strategy,
+                    "args_count": len(chrome_options.arguments)
+                }
+            )
+            # #endregion
             driver = webdriver.Chrome(service=service, options=chrome_options)
         else:
             # Fallback: let Selenium find ChromeDriver automatically
@@ -843,15 +934,66 @@ def create_chrome_driver():
         driver.implicitly_wait(10)  # 10 seconds implicit wait
         
         logger.info("Chrome driver created successfully")
+        # #region agent log
+        debug_log(
+            run_id="pre-fix",
+            hypothesis_id="H5",
+            location="app.py:create_chrome_driver:success",
+            message="Webdriver session created successfully",
+            data={"current_url": getattr(driver, "current_url", ""), "window_count": len(driver.window_handles)}
+        )
+        # #endregion
         return driver
         
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Failed to initialize Chrome driver. Error: {error_msg}")
-        logger.error(traceback.format_exc())
+        logger.error(tb_module.format_exc())
+        # #region agent log
+        debug_log(
+            run_id="pre-fix",
+            hypothesis_id="H2,H3,H4,H5",
+            location="app.py:create_chrome_driver:exception",
+            message="Webdriver launch failed",
+            data={
+                "error": error_msg,
+                "chrome_binary": chrome_options.binary_location,
+                "has_headless_flag": "--headless" in chrome_options.arguments,
+                "has_disable_gpu_flag": "--disable-gpu" in chrome_options.arguments,
+                "has_disable_extensions_flag": "--disable-extensions" in chrome_options.arguments,
+                "temp_profile_arg": next((arg for arg in chrome_options.arguments if arg.startswith("--user-data-dir=")), "")
+            }
+        )
+        # #endregion
         
+        error_msg_lower = error_msg.lower()
+
+        # Prioritize network/timeout errors before compatibility heuristics
+        if (
+            "timeout" in error_msg_lower
+            or "connection" in error_msg_lower
+            or "err_connection_timed_out" in error_msg_lower
+            or "net::err_" in error_msg_lower
+        ):
+            logger.error("Connection/Timeout error during driver creation.")
+            raise Exception(
+                f"Connection timeout during driver initialization: {error_msg}\n\n"
+                f"This usually means VPN is not connected or the proxy is unreachable.\n\n"
+                f"SOLUTION:\n"
+                f"1. Check VPN connection\n"
+                f"2. If using proxy, verify VPN_PROXY in .env file\n"
+                f"3. Test VPN by accessing the site manually\n\n"
+                f"Technical details: {error_msg}"
+            )
         # Check for ChromeDriver compatibility issues
-        if "chromedriver" in error_msg.lower() or "executable" in error_msg.lower() or "version" in error_msg.lower() or "no such window" in error_msg.lower():
+        elif (
+            "session not created" in error_msg_lower
+            or "only supports chrome version" in error_msg_lower
+            or "chromedriver" in error_msg_lower
+            or "executable needs to be in path" in error_msg_lower
+            or "no such window" in error_msg_lower
+            or "unable to discover open window" in error_msg_lower
+        ):
             chrome_version = get_chrome_version()
             version_info = f"\nDetected Chrome version: {chrome_version}\n" if chrome_version else "\n"
             
@@ -864,17 +1006,6 @@ def create_chrome_driver():
                 f"1. The app will automatically download compatible ChromeDriver\n"
                 f"2. Make sure Chrome browser is installed and up to date\n"
                 f"3. Try scraping again - it should work automatically\n\n"
-                f"Technical details: {error_msg}"
-            )
-        elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-            logger.error("Connection/Timeout error during driver creation.")
-            raise Exception(
-                f"Connection timeout during driver initialization: {error_msg}\n\n"
-                f"This usually means VPN is not connected or the proxy is unreachable.\n\n"
-                f"SOLUTION:\n"
-                f"1. Check VPN connection\n"
-                f"2. If using proxy, verify VPN_PROXY in .env file\n"
-                f"3. Test VPN by accessing the site manually\n\n"
                 f"Technical details: {error_msg}"
             )
         else:
@@ -1183,8 +1314,7 @@ def download_excel():
                         )
             except Exception as e:
                 print(f"Error creating Excel from leads: {e}")
-                import traceback
-                traceback.print_exc()
+                tb_module.print_exc()
     
     # If still no file, try to find the latest Excel file in the directory
     try:
@@ -1305,8 +1435,7 @@ def update_sheet():
                             print("No Excel files found matching pattern")
                     except Exception as list_error:
                         print(f"Error listing directory: {list_error}")
-                        import traceback
-                        traceback.print_exc()
+                        tb_module.print_exc()
                 
                 if excel_file_path and os.path.exists(excel_file_path):
                     print(f"Reading Excel file: {excel_file_path}")
@@ -1337,8 +1466,7 @@ def update_sheet():
                     print(f"Excel file not found or doesn't exist: {excel_file_path}")
             except Exception as e:
                 print(f"Error reading Excel file: {e}")
-                import traceback
-                traceback.print_exc()
+                tb_module.print_exc()
         
         print(f"Final leads count: {len(leads) if leads else 0}")
         if not leads or len(leads) == 0:
@@ -1372,8 +1500,7 @@ def update_sheet():
                         print(f"Loaded {len(leads)} leads from latest Excel file: {latest_file}")
             except Exception as final_error:
                 print(f"Final attempt to read Excel failed: {final_error}")
-                import traceback
-                traceback.print_exc()
+                tb_module.print_exc()
         
         if not leads or len(leads) == 0:
             error_msg = 'No leads found. Please scrape leads first. (Checked JSON files and Excel files)'
@@ -1641,8 +1768,7 @@ def scrape_data():
             sheets_error = str(e)
             error_msg = f"Google Sheets integration failed: {str(e)}"
             print(f"❌ {error_msg}")
-            import traceback
-            traceback.print_exc()
+            tb_module.print_exc()
             
             # Log error to file
             try:
@@ -1652,7 +1778,7 @@ def scrape_data():
                 with open(log_file, 'a', encoding='utf-8') as f:
                     timestamp = datetime.now().isoformat()
                     f.write(f"\n[{timestamp}] {error_msg}\n")
-                    f.write(f"{traceback.format_exc()}\n")
+                    f.write(f"{tb_module.format_exc()}\n")
             except:
                 pass
             
@@ -1691,8 +1817,7 @@ def scrape_data():
                     excel_filename = None
             except Exception as e:
                 print(f"⚠️  Warning: Error saving Excel file: {e}")
-                import traceback
-                traceback.print_exc()
+                tb_module.print_exc()
                 excel_file_path = None
                 excel_filename = None
         
@@ -1720,8 +1845,7 @@ def scrape_data():
                 print(f"💾 Saved {len(all_leads)} leads to {lead_file_id}.json")
             except Exception as e:
                 print(f"⚠️  Warning: Error saving leads to JSON file: {e}")
-                import traceback
-                traceback.print_exc()
+                tb_module.print_exc()
         
         # Return response
         return jsonify({
@@ -1737,26 +1861,40 @@ def scrape_data():
         })
         
     except Exception as e:
-        logger.error(f"Critical error in scrape_data: {e}")
-        logger.error(traceback.format_exc())
+        # logger.error(f"Critical error in scrape_data: {e}")
+        # logger.error(get_safe_traceback())
         
         error_message = str(e)
         
         # Provide helpful error messages
-        if 'stacktrace' in error_message.lower() or 'unknown' in error_message.lower() or '#0 0x' in error_message or 'chromedriver' in error_message.lower() or 'no such window' in error_message.lower():
-            error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
-                          f"SOLUTION:\n" \
-                          f"1. The app will automatically download compatible ChromeDriver\n" \
-                          f"2. Make sure Chrome browser is installed and up to date\n" \
-                          f"3. Try scraping again - it should work automatically\n\n" \
-                          f"Technical details: {error_message}"
-        elif 'timeout' in error_message.lower() or 'connection' in error_message.lower() or 'refused' in error_message.lower():
+        error_message_lower = error_message.lower()
+        if (
+            'timeout' in error_message_lower
+            or 'connection' in error_message_lower
+            or 'refused' in error_message_lower
+            or 'net::err_' in error_message_lower
+        ):
             error_message = f"Connection error: {error_message}\n\n" \
                           f"VPN Setup Required:\n" \
                           f"1. If using VPN proxy, create .env file with: VPN_PROXY=http://proxy:port\n" \
                           f"2. If using VPN extension, install it in scraper Chrome (first run)\n" \
                           f"3. If using system VPN, ensure it's connected\n" \
                           f"4. Verify you can access the website manually"
+        elif (
+            'session not created' in error_message_lower
+            or 'only supports chrome version' in error_message_lower
+            or 'chromedriver' in error_message_lower
+            or 'no such window' in error_message_lower
+            or 'unable to discover open window' in error_message_lower
+            or 'stacktrace' in error_message_lower
+            or '#0 0x' in error_message
+        ):
+            error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
+                          f"SOLUTION:\n" \
+                          f"1. The app will automatically download compatible ChromeDriver\n" \
+                          f"2. Make sure Chrome browser is installed and up to date\n" \
+                          f"3. Try scraping again - it should work automatically\n\n" \
+                          f"Technical details: {error_message}"
         else:
             error_message = f"Error during scraping: {error_message}\n\n" \
                           f"If this is a VPN issue, ensure VPN is configured (see VPN Setup in README)"
@@ -1894,8 +2032,7 @@ def scrape():
         except Exception as e:
             sheets_error = str(e)
             print(f"❌ Error adding towns to Google Sheets: {sheets_error}")
-            import traceback
-            traceback.print_exc()
+            tb_module.print_exc()
             error_msg = f"Google Sheets integration failed: {str(e)}"
             log_dir = os.path.join(os.path.dirname(__file__), 'logs')
             os.makedirs(log_dir, exist_ok=True)
@@ -1903,7 +2040,7 @@ def scrape():
                 log_file = os.path.join(log_dir, 'google_sheets_errors.log')
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write(f"\n[{datetime.now().isoformat()}] {error_msg}\n")
-                    f.write(f"{traceback.format_exc()}\n")
+                    f.write(f"{tb_module.format_exc()}\n")
             except:
                 pass
         
@@ -1917,26 +2054,40 @@ def scrape():
         })
         
     except Exception as e:
-        logger.error(f"Critical error in scrape route: {e}")
-        logger.error(traceback.format_exc())
+        # logger.error(f"Critical error in scrape route: {e}")
+        # logger.error(get_safe_traceback())
         
         error_message = str(e)
         
         # Provide helpful error messages
-        if 'stacktrace' in error_message.lower() or 'unknown' in error_message.lower() or '#0 0x' in error_message or 'chromedriver' in error_message.lower() or 'no such window' in error_message.lower():
-            error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
-                          f"SOLUTION:\n" \
-                          f"1. The app will automatically download compatible ChromeDriver\n" \
-                          f"2. Make sure Chrome browser is installed and up to date\n" \
-                          f"3. Try scraping again - it should work automatically\n\n" \
-                          f"Technical details: {error_message}"
-        elif 'timeout' in error_message.lower() or 'connection' in error_message.lower() or 'refused' in error_message.lower():
+        error_message_lower = error_message.lower()
+        if (
+            'timeout' in error_message_lower
+            or 'connection' in error_message_lower
+            or 'refused' in error_message_lower
+            or 'net::err_' in error_message_lower
+        ):
             error_message = f"Connection error: {error_message}\n\n" \
                           f"VPN Setup Required:\n" \
                           f"1. If using VPN proxy, create .env file with: VPN_PROXY=http://proxy:port\n" \
                           f"2. If using VPN extension, install it in scraper Chrome (first run)\n" \
                           f"3. If using system VPN, ensure it's connected\n" \
                           f"4. Verify you can access the website manually"
+        elif (
+            'session not created' in error_message_lower
+            or 'only supports chrome version' in error_message_lower
+            or 'chromedriver' in error_message_lower
+            or 'no such window' in error_message_lower
+            or 'unable to discover open window' in error_message_lower
+            or 'stacktrace' in error_message_lower
+            or '#0 0x' in error_message
+        ):
+            error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
+                          f"SOLUTION:\n" \
+                          f"1. The app will automatically download compatible ChromeDriver\n" \
+                          f"2. Make sure Chrome browser is installed and up to date\n" \
+                          f"3. Try scraping again - it should work automatically\n\n" \
+                          f"Technical details: {error_message}"
         else:
             error_message = f"Error during scraping: {error_message}\n\n" \
                           f"If this is a VPN issue, ensure VPN is configured (see VPN Setup in README)"
@@ -1979,7 +2130,7 @@ def handle_exception(e):
     """Handle all other exceptions with JSON response"""
     return jsonify({
         'success': False,
-        'error': f'Unexpected error: {str(e)}. Please check the server logs for more details.'
+        'error': f'Unexpected error: {str(e)} (at handler)'
     }), 500
 
 
