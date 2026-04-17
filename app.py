@@ -52,6 +52,19 @@ from datetime import datetime, timedelta
 import pandas as pd
 import threading
 import tempfile
+import logging
+import traceback
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("backend.log")
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file if it exists
 try:
@@ -558,12 +571,15 @@ def scrape_town_leads(driver, town_name, original_window):
 
 def get_chrome_version():
     """Get installed Chrome version"""
+    logger.info("Detecting Chrome version...")
     try:
         import subprocess
         import re
         import platform
         
         system = platform.system()
+        logger.info(f"Operating System: {system}")
+        
         if system == "Windows":
             # Try multiple registry locations
             try:
@@ -574,9 +590,11 @@ def get_chrome_version():
                 if result.returncode == 0:
                     match = re.search(r'version\s+REG_SZ\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
                     if match:
-                        return match.group(1)
-            except:
-                pass
+                        version = match.group(1)
+                        logger.info(f"Found Chrome version in registry (HKCU): {version}")
+                        return version
+            except Exception as e:
+                logger.debug(f"HKCU registry check failed: {e}")
             
             try:
                 result = subprocess.run(
@@ -586,9 +604,11 @@ def get_chrome_version():
                 if result.returncode == 0:
                     match = re.search(r'version\s+REG_SZ\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
                     if match:
-                        return match.group(1)
-            except:
-                pass
+                        version = match.group(1)
+                        logger.info(f"Found Chrome version in registry (HKLM): {version}")
+                        return version
+            except Exception as e:
+                logger.debug(f"HKLM registry check failed: {e}")
             
             # Try reading from Chrome executable using wmic (more reliable on Windows)
             try:
@@ -601,9 +621,10 @@ def get_chrome_version():
                         if line.startswith('Version='):
                             version = line.split('=')[1].strip()
                             if version:
+                                logger.info(f"Found Chrome version via wmic: {version}")
                                 return version
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"wmic check failed: {e}")
             
             # Fallback: Try reading from Chrome executable using PowerShell
             chrome_paths = [
@@ -621,9 +642,10 @@ def get_chrome_version():
                         if result.returncode == 0:
                             version = result.stdout.strip()
                             if version:
+                                logger.info(f"Found Chrome version via PowerShell at {chrome_path}: {version}")
                                 return version
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"PowerShell check at {chrome_path} failed: {e}")
         elif system == "Darwin":  # macOS
             try:
                 result = subprocess.run(
@@ -633,9 +655,11 @@ def get_chrome_version():
                 if result.returncode == 0:
                     match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
                     if match:
-                        return match.group(1)
-            except:
-                pass
+                        version = match.group(1)
+                        logger.info(f"Found Chrome version (macOS): {version}")
+                        return version
+            except Exception as e:
+                logger.debug(f"macOS version check failed: {e}")
         else:  # Linux
             try:
                 result = subprocess.run(
@@ -645,16 +669,19 @@ def get_chrome_version():
                 if result.returncode == 0:
                     match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
                     if match:
-                        return match.group(1)
-            except:
-                pass
+                        version = match.group(1)
+                        logger.info(f"Found Chrome version (Linux): {version}")
+                        return version
+            except Exception as e:
+                logger.debug(f"Linux google-chrome version check failed: {e}")
     except Exception as e:
-        print(f"Could not detect Chrome version: {e}")
+        logger.error(f"Could not detect Chrome version: {e}")
     return None
 
 
 def get_chromedriver_path():
     """Get ChromeDriver path, handling webdriver-manager bug and version compatibility"""
+    logger.info("Starting get_chromedriver_path()...")
     try:
         from webdriver_manager.chrome import ChromeDriverManager
         import os
@@ -663,18 +690,19 @@ def get_chromedriver_path():
         # Get Chrome version to ensure compatibility
         chrome_version = get_chrome_version()
         if chrome_version:
-            print(f"Detected Chrome version: {chrome_version}")
+            logger.info(f"Detected Chrome version: {chrome_version}")
             # Extract major version (e.g., 143.0.7499.193 -> 143)
             major_version = chrome_version.split('.')[0]
-            print(f"Chrome major version: {major_version}")
+            logger.info(f"Chrome major version: {major_version}")
         else:
-            print("Could not detect Chrome version, will download latest compatible ChromeDriver")
+            logger.warning("Could not detect Chrome version, will download latest compatible ChromeDriver")
         
-        print("Downloading/updating ChromeDriver to match Chrome version...")
+        logger.info("Downloading/updating ChromeDriver to match Chrome version...")
         
         # Force download with version detection
         driver_manager = ChromeDriverManager()
         driver_path = driver_manager.install()
+        logger.info(f"webdriver-manager installed driver to: {driver_path}")
         
         # Check if it's actually the chromedriver executable
         if os.path.isfile(driver_path) and os.access(driver_path, os.X_OK):
@@ -684,24 +712,31 @@ def get_chromedriver_path():
                     header = f.read(4)
                     # ELF binary (Linux) or MZ (Windows) or Mach-O (macOS)
                     if header.startswith(b'\x7fELF') or header.startswith(b'MZ') or header.startswith(b'\xcf\xfa'):
+                        logger.info(f"Verified executable at: {driver_path}")
                         return driver_path
-            except:
-                pass
+                    else:
+                        logger.warning(f"File at {driver_path} is not a valid executable binary")
+            except Exception as e:
+                logger.error(f"Error reading binary header at {driver_path}: {e}")
         
         # If driver_path is wrong, find the actual chromedriver
         # webdriver-manager extracts to a subdirectory
+        logger.info(f"Searching for chromedriver binary in {os.path.dirname(driver_path)}...")
         driver_dir = os.path.dirname(driver_path)
         for root, dirs, files in os.walk(driver_dir):
             for file in files:
                 if file == 'chromedriver' or file == 'chromedriver.exe':
                     full_path = os.path.join(root, file)
                     if os.access(full_path, os.X_OK):
+                        logger.info(f"Found executable at: {full_path}")
                         return full_path
         
         # Fallback: try to find in common locations
+        logger.warning(f"Fallback: returning driver_path as is: {driver_path}")
         return driver_path
     except Exception as e:
-        print(f"Warning: Could not use webdriver-manager: {e}")
+        logger.error(f"Critical error in get_chromedriver_path: {e}")
+        logger.error(traceback.format_exc())
         return None
 
 
@@ -714,6 +749,7 @@ def create_chrome_driver():
     - If VPN_PROXY is set, uses proxy
     - Otherwise, uses system VPN or allows VPN extension in scraper Chrome
     """
+    logger.info("Initializing Chrome Options...")
     chrome_options = Options()
     
     # Use separate profile for scraping (doesn't interfere with user's Chrome)
@@ -722,19 +758,23 @@ def create_chrome_driver():
     import uuid
     unique_profile = f"{SCRAPER_CHROME_PROFILE}-{uuid.uuid4().hex[:8]}"
     # chrome_options.add_argument(f"--user-data-dir={SCRAPER_CHROME_PROFILE}")
-    chrome_options.add_argument(f"--user-data-dir={tempfile.mkdtemp()}")
+    temp_profile_dir = tempfile.mkdtemp()
+    logger.info(f"Using temporary profile directory: {temp_profile_dir}")
+    chrome_options.add_argument(f"--user-data-dir={temp_profile_dir}")
     
     # Kill any existing Chrome instances using this profile
     try:
         import subprocess
         # Find Chrome processes using this profile
+        logger.info(f"Attempting to kill existing Chrome processes using profile: {SCRAPER_CHROME_PROFILE}")
         subprocess.run(["pkill", "-f", SCRAPER_CHROME_PROFILE], 
                       stderr=subprocess.DEVNULL, timeout=2)
         time.sleep(0.5)  # Wait a moment for processes to die
-    except:
-        pass  # Ignore errors
+    except Exception as e:
+        logger.debug(f"Process cleanup (pkill) failed or not needed: {e}")
     
     # Additional options for stability and compatibility
+    logger.info("Setting Chrome flags...")
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -746,12 +786,17 @@ def create_chrome_driver():
     chrome_options.add_argument("--disable-setuid-sandbox")
     chrome_options.add_argument("--no-zygote")
     chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument(f"--crash-dumps-dir={tempfile.gettempdir()}")
+    crash_dump_dir = tempfile.gettempdir()
+    logger.info(f"Setting crash dumps directory to: {crash_dump_dir}")
+    chrome_options.add_argument(f"--crash-dumps-dir={crash_dump_dir}")
+    
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
     # Set user agent to avoid detection
-    chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    logger.info(f"Using User-Agent: {user_agent}")
+    chrome_options.add_argument(f'user-agent={user_agent}')
     
     # Set page load strategy to 'eager' for faster loading (don't wait for all resources)
     chrome_options.page_load_strategy = 'eager'
@@ -764,72 +809,76 @@ def create_chrome_driver():
     
     # VPN/Proxy support
     if VPN_PROXY:
-        print(f"Using VPN proxy: {VPN_PROXY}")
+        logger.info(f"Using VPN proxy: {VPN_PROXY}")
         chrome_options.add_argument(f"--proxy-server={VPN_PROXY}")
         if VPN_PROXY_USER and VPN_PROXY_PASS:
             # Note: Selenium doesn't support proxy auth directly, 
             # but we can use an extension or handle it differently
+            logger.info("Proxy credentials provided (note: selenium may need extra handling for this)")
             pass
     else:
         # No proxy configured - will use VPN extension if installed in Chrome profile
-        print("No proxy configured - using system VPN or Chrome extension (if installed)")
-        print("💡 Tip: Install a VPN extension in the scraper's Chrome for easy VPN access")
+        logger.info("No proxy configured - using system VPN or Chrome extension (if installed)")
     
     try:
         # Try to get ChromeDriver path with version detection
-        print("Detecting Chrome version and downloading compatible ChromeDriver...")
+        logger.info("Attempting to get ChromeDriver path...")
         driver_path = get_chromedriver_path()
         
         if driver_path and os.path.exists(driver_path):
-            print(f"Using ChromeDriver: {driver_path}")
+            logger.info(f"Using ChromeDriver at: {driver_path}")
             service = Service(driver_path)
             # Set service timeout
             service.service_args = ['--timeout=60']
+            logger.info("Starting webdriver.Chrome with service and options...")
             driver = webdriver.Chrome(service=service, options=chrome_options)
         else:
             # Fallback: let Selenium find ChromeDriver automatically
-            print("Using system ChromeDriver (auto-detected)...")
+            logger.warning("No specific driver path found, falling back to auto-detection...")
             driver = webdriver.Chrome(options=chrome_options)
         
         # Set timeouts for the driver
+        logger.info("Setting driver timeouts...")
         driver.set_page_load_timeout(60)  # 60 seconds for page load
         driver.implicitly_wait(10)  # 10 seconds implicit wait
         
-        print("Chrome driver created successfully")
+        logger.info("Chrome driver created successfully")
         return driver
         
     except Exception as e:
         error_msg = str(e)
+        logger.error(f"Failed to initialize Chrome driver. Error: {error_msg}")
+        logger.error(traceback.format_exc())
         
         # Check for ChromeDriver compatibility issues
-        if "chromedriver" in error_msg.lower() or "executable" in error_msg.lower() or "version" in error_msg.lower():
+        if "chromedriver" in error_msg.lower() or "executable" in error_msg.lower() or "version" in error_msg.lower() or "no such window" in error_msg.lower():
             chrome_version = get_chrome_version()
             version_info = f"\nDetected Chrome version: {chrome_version}\n" if chrome_version else "\n"
             
+            logger.error(f"Detected potential compatibility issue. Chrome version: {chrome_version}")
+            
             raise Exception(
-                f"ChromeDriver compatibility error: {error_msg}\n\n"
+                f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n"
                 f"{version_info}"
                 f"SOLUTION:\n"
                 f"1. The app will automatically download compatible ChromeDriver\n"
                 f"2. Make sure Chrome browser is installed and up to date\n"
-                f"3. If automatic download fails:\n"
-                f"   - Clear cache: Delete ~/.wdm folder\n"
-                f"   - Restart the app - it will download fresh ChromeDriver\n"
-                f"   - Check internet connection for ChromeDriver download\n\n"
-                f"Original error: {error_msg[:300]}"
+                f"3. Try scraping again - it should work automatically\n\n"
+                f"Technical details: {error_msg}"
             )
         elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+            logger.error("Connection/Timeout error during driver creation.")
             raise Exception(
-                f"Connection timeout: {error_msg}\n\n"
-                f"This usually means VPN is not connected.\n\n"
+                f"Connection timeout during driver initialization: {error_msg}\n\n"
+                f"This usually means VPN is not connected or the proxy is unreachable.\n\n"
                 f"SOLUTION:\n"
                 f"1. Check VPN connection\n"
                 f"2. If using proxy, verify VPN_PROXY in .env file\n"
-                f"3. Test VPN by accessing the site manually in browser\n"
-                f"4. Try again after ensuring VPN is active\n\n"
-                f"Original error: {error_msg[:300]}"
+                f"3. Test VPN by accessing the site manually\n\n"
+                f"Technical details: {error_msg}"
             )
         else:
+            logger.error(f"Generic failure to initialize Chrome driver: {error_msg}")
             raise Exception(f"Failed to initialize Chrome driver: {error_msg}")
 
 
@@ -1688,17 +1737,19 @@ def scrape_data():
         })
         
     except Exception as e:
+        logger.error(f"Critical error in scrape_data: {e}")
+        logger.error(traceback.format_exc())
+        
         error_message = str(e)
         
         # Provide helpful error messages
-        if 'stacktrace' in error_message.lower() or 'unknown' in error_message.lower() or '#0 0x' in error_message:
-            error_message = f"ChromeDriver compatibility error detected.\n\n" \
-                          f"This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
+        if 'stacktrace' in error_message.lower() or 'unknown' in error_message.lower() or '#0 0x' in error_message or 'chromedriver' in error_message.lower() or 'no such window' in error_message.lower():
+            error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
                           f"SOLUTION:\n" \
                           f"1. The app will automatically download compatible ChromeDriver\n" \
                           f"2. Make sure Chrome browser is installed and up to date\n" \
                           f"3. Try scraping again - it should work automatically\n\n" \
-                          f"Technical details: {error_message[:200]}"
+                          f"Technical details: {error_message}"
         elif 'timeout' in error_message.lower() or 'connection' in error_message.lower() or 'refused' in error_message.lower():
             error_message = f"Connection error: {error_message}\n\n" \
                           f"VPN Setup Required:\n" \
@@ -1706,12 +1757,6 @@ def scrape_data():
                           f"2. If using VPN extension, install it in scraper Chrome (first run)\n" \
                           f"3. If using system VPN, ensure it's connected\n" \
                           f"4. Verify you can access the website manually"
-        elif 'chromedriver' in error_message.lower() or 'executable' in error_message.lower():
-            error_message = f"ChromeDriver error: {error_message}\n\n" \
-                          f"SOLUTION:\n" \
-                          f"1. Make sure Chrome browser is installed\n" \
-                          f"2. The app will try to download ChromeDriver automatically\n" \
-                          f"3. If it fails, check internet connection and try again"
         else:
             error_message = f"Error during scraping: {error_message}\n\n" \
                           f"If this is a VPN issue, ensure VPN is configured (see VPN Setup in README)"
@@ -1725,8 +1770,10 @@ def scrape_data():
         # Close the driver to free resources (we create a new one each time)
         if driver:
             try:
+                logger.info("Closing Chrome driver...")
                 driver.quit()
-            except:
+            except Exception as e:
+                logger.warning(f"Error while quitting driver: {e}")
                 pass
 
 
@@ -1870,17 +1917,19 @@ def scrape():
         })
         
     except Exception as e:
+        logger.error(f"Critical error in scrape route: {e}")
+        logger.error(traceback.format_exc())
+        
         error_message = str(e)
         
         # Provide helpful error messages
-        if 'stacktrace' in error_message.lower() or 'unknown' in error_message.lower() or '#0 0x' in error_message:
-            error_message = f"ChromeDriver compatibility error detected.\n\n" \
-                          f"This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
+        if 'stacktrace' in error_message.lower() or 'unknown' in error_message.lower() or '#0 0x' in error_message or 'chromedriver' in error_message.lower() or 'no such window' in error_message.lower():
+            error_message = f"ChromeDriver compatibility error detected. This usually means ChromeDriver version doesn't match Chrome version.\n\n" \
                           f"SOLUTION:\n" \
                           f"1. The app will automatically download compatible ChromeDriver\n" \
                           f"2. Make sure Chrome browser is installed and up to date\n" \
                           f"3. Try scraping again - it should work automatically\n\n" \
-                          f"Technical details: {error_message[:200]}"
+                          f"Technical details: {error_message}"
         elif 'timeout' in error_message.lower() or 'connection' in error_message.lower() or 'refused' in error_message.lower():
             error_message = f"Connection error: {error_message}\n\n" \
                           f"VPN Setup Required:\n" \
@@ -1888,12 +1937,6 @@ def scrape():
                           f"2. If using VPN extension, install it in scraper Chrome (first run)\n" \
                           f"3. If using system VPN, ensure it's connected\n" \
                           f"4. Verify you can access the website manually"
-        elif 'chromedriver' in error_message.lower() or 'executable' in error_message.lower():
-            error_message = f"ChromeDriver error: {error_message}\n\n" \
-                          f"SOLUTION:\n" \
-                          f"1. Make sure Chrome browser is installed\n" \
-                          f"2. The app will try to download ChromeDriver automatically\n" \
-                          f"3. If it fails, check internet connection and try again"
         else:
             error_message = f"Error during scraping: {error_message}\n\n" \
                           f"If this is a VPN issue, ensure VPN is configured (see VPN Setup in README)"
@@ -1907,8 +1950,10 @@ def scrape():
         # Close the driver to free resources (we create a new one each time)
         if driver:
             try:
+                logger.info("Closing Chrome driver...")
                 driver.quit()
-            except:
+            except Exception as e:
+                logger.warning(f"Error while quitting driver: {e}")
                 pass
 
 
